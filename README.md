@@ -259,157 +259,35 @@ export RK3588_TEMP_CRIT_C=65
 
 ## 上板部署步骤
 
-按顺序执行，每步独立可验证。
+> **完整、权威、可执行的部署细节见 [`SETUP_RK3588.md`](SETUP_RK3588.md)**
+> （llama-server / Ollama 安装、启动、GGUF 模型、约束解码验证、快速排查）。
+> 本处只给**流程总览**，避免与 SETUP 内容重复导致不一致。
 
-### Step 1 · 确认硬件路径
+| 步骤 | 做什么 | 去哪看 |
+|------|--------|--------|
+| 1 | 确认板子 sysfs 路径（温度/频率/内存） | `SETUP_RK3588.md` §3 |
+| 2 | 装 Python 依赖 `psutil pydantic` | `SETUP_RK3588.md` §2 |
+| 3 | 部署约束解码推理：**llama.cpp（主）/ Ollama（备）** | `SETUP_RK3588.md` §4 |
+| 4 | 准备 GGUF 模型（Qwen2.5-1.5B q4_k_m） | `SETUP_RK3588.md` §4 |
+| 5 | 验证 Monitor 采集 + 跑约束解码验证 | `SETUP_RK3588.md` §5 |
+| 6 | 动态控制验证 / 联调 / 快速排查 | `SETUP_RK3588.md` §6 / 快速排查 |
 
-SSH 进板子，确认 sysfs 路径：
-
-```bash
-# 温度传感器
-ls /sys/class/thermal/thermal_zone*/type
-cat /sys/class/thermal/thermal_zone*/type
-# 预期看到 cpu-thermal, npu-thermal (或类似)
-
-# NPU 频率调节
-ls /sys/class/devfreq/
-# 预期看到含 "npu" 的设备名
-
-# 内存
-cat /proc/meminfo | head -5
-```
-
-**把输出发我**，不同板子的 zone 编号不一样，我帮你改 `monitor.py`。
-
-### Step 2 · 装依赖
+快速验证命令（完整版见 SETUP）：
 
 ```bash
-pip install psutil pydantic
-```
-
-**部署约束解码推理（llama.cpp / Ollama）** —— 完整安装、启动、验证请照 **`SETUP_RK3588.md`**。
-此处给快速路径：
-
-```bash
-# 方案A: llama.cpp (主推, 硬约束)
-cd ~ && git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp/build
-cmake .. -DGGML_NATIVE=OFF && make -j$(nproc) llama-server
-./bin/llama-server -m /data/qwen2.5-1.5b-instruct-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 2048
-
-# 方案B: Ollama (备选)
-curl -fsSL https://ollama.com/install.sh | sh && ollama pull qwen2.5:1.5b && ollama serve &
-```
-
-### Step 3 · 模型转换（Qwen → .gguf，约束解码用）
-
-不再转 `.rknn`（旧 RKNN 路线已弃用）。用 llama.cpp / Ollama 需要的 **GGUF** 格式：
-
-```bash
-# GGUF 可直接从 HF 下载现成的，如:
-#   Qwen/Qwen2.5-1.5B-Instruct-GGUF → qwen2.5-1.5b-instruct-q4_k_m.gguf
-scp qwen2.5-1.5b-instruct-q4_k_m.gguf user@rk3588:/data/
-
-# 或用官方转换脚本从 HF 权重转 GGUF（按 llama.cpp 文档）
-```
-
-### Step 4 · 验证 Monitor 采集
-
-```bash
-cd 揭榜挂帅
-python -c "
-from dynamic_control.monitor import Monitor
-m = Monitor()
-s = m.snapshot()
-print('Level:', s.level)
-print('NPU temp:', s.npu_temp_c, '°C')
-print('CPU temp:', s.cpu_temp_c, '°C')
-print('NPU freq:', s.npu_freq_mhz, 'MHz')
-print('Memory:', round(s.mem_avail_gb, 2), 'GB available')
-"
-```
-
-预期：温度、频率、内存有真实值（不是 0 / None）。如果全空，把 Step 1 的输出发我。
-
-### Step 5 · 跑集成测试
-
-```bash
-python test_dynamic_control.py
-```
-
-预期 8/8 通过。
-
-### Step 6 · 连接约束解码服务并验证推理
-
-先确认服务可达（llama.cpp 或 Ollama）：
-
-```bash
+# 1. 服务可达
 curl http://127.0.0.1:8080/v1/models        # llama.cpp
 # 或
 curl http://127.0.0.1:11434/api/tags        # Ollama
-```
 
-用本代码验证约束解码（只出合法 JSON，无废话）：
-
-```python
-from dynamic_control import DynamicController
-
-ctrl = DynamicController()
-ctrl.init()
-
-result = ctrl.generate_json(
-    "输出学生张三, 20岁, 计算机专业",
-    {"type":"object",
-     "properties":{"name":{"type":"string"},"age":{"type":"integer"},"major":{"type":"string"}},
-     "required":["name","age","major"]}
-)
-print(result)
+# 2. 约束解码（只出合法 JSON，无废话）
+python -c "from dynamic_control import DynamicController; c=DynamicController(); c.init(); print(c.generate_json('输出学生张三,20岁,计算机专业',{'type':'object','properties':{'name':{'type':'string'},'age':{'type':'integer'},'major':{'type':'string'}},'required':['name','age','major']}))"
 # 预期: {'name': '张三', 'age': 20, 'major': '计算机'}
 ```
 
-> 由 llama.cpp/Ollama 的 grammar 在 token 采样层硬约束，**不会**夹带"推理过程/自然语言废话"。
-
-### Step 7 · 约束解码原理说明
-
-JSON-schema 硬约束由**后端**（llama.cpp 的 GBNF grammar / Ollama 的 structured outputs）
-在**机床(token采样)层面**完成，代码 `llamacpp_backend.py` / `ollama_backend.py` 负责封装请求。
-旧 `RKNBackend`（rknnlite 单次前向）不是 LLM 工具链、无法约束解码，已弃用。
-
-### Step 8 · 模拟负载测试
-
-```bash
-python demo_dynamic_control.py
-```
-
-验证各场景决策是否符合预期。
-
-### Step 9 · 联调
-
-调度员（2.1 模块）接入：
-
-```python
-from dynamic_control import DynamicController
-
-ctrl = DynamicController()
-ctrl.init()
-
-# 调度员只需调这三个方法
-result = ctrl.generate_json(prompt, schema)
-status = ctrl.status()          # 可选: 查看当前后端和状态
-health = ctrl.health()          # 可选: 轻量健康检查
-```
-
-### Step 10 · 调整阈值（按实际工况）
-
-根据板子实际散热和负载调整。当前默认值基于室内空调环境。
-
-```bash
-# 查看当前阈值
-python -c "from dynamic_control.config import get_config; c=get_config(); print(f'temp_warn={c.temp_warn_c}°C temp_crit={c.temp_crit_c}°C mem_warn={c.mem_warn_gb}GB')"
-
-# 覆盖（按你的板子实际工况）
-export RK3588_TEMP_WARN_C=70    # 散热好就放宽
-export RK3588_MEM_WARN_GB=0.5   # 内存紧张就收紧
-```
+> JSON-schema 硬约束由**后端**（llama.cpp GBNF grammar / Ollama structured outputs）
+> 在**机床(token采样)层面**完成，**不会**夹带"推理过程/自然语言废话"。
+> 旧 `RKNBackend`（rknnlite 单次前向）非 LLM 工具链，已弃用。
 
 ---
 
@@ -417,7 +295,7 @@ export RK3588_MEM_WARN_GB=0.5   # 内存紧张就收紧
 
 ### Q: Monitor 返回全是 0/None
 
-sysfs 路径不对。跑 Step 1，把输出发我。不同 RK3588 板子的 `thermal_zone` 编号和 `devfreq` 设备名不同。
+sysfs 路径不对。按 `SETUP_RK3588.md` §3 确认 thermal zone 和 devfreq;不同板子编号不同,把输出发我。
 
 ### Q: 连不上约束解码服务
 
@@ -485,3 +363,4 @@ export RK3588_STABILITY_SEC=60
 | 7/18 | Day 11-14：Ollama 部署，内存达标 |
 | 7/19 | Day 15-22：单元测试 + 文档 + PPT |
 | 8/11 | Day 23+：动态控制系统架构 + 实现 + 架构图 |
+| 8/17 | 部署路线对齐：RK3588 用 llama.cpp/Ollama 约束解码；README 上板步骤改为总览并统一指向 SETUP |
