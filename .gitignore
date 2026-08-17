@@ -1,0 +1,19 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 模型文件（大，不入库）
+*.rknn
+*.rkllm
+*.onnx
+qwen_onnx/
+*.gguf
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 系统文件
+Thumbs.db
+.DS_Store

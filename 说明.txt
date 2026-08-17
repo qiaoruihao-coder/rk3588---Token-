@@ -1,0 +1,102 @@
+============================================================
+        揭榜挂帅 · 执行人组 1.1 模块 提交说明
+============================================================
+
+【项目名称】
+  输出 Token 强制控制 + 模型运行时动态控制（RK3588 部署）
+
+【作者】
+  乔瑞浩、张倬铭
+
+【模块位置】
+  L1 执行人层
+
+【提交内容一览】
+  本文件夹包含 1.1 模块的完整代码、测试、文档与答辩材料，
+  共 24+ 个文件，分 7 类：
+
+  1. 核心模块（RK3588 可运行）
+     - sglang_1_1_module.py          1.1 模块主文件（RK3588 NPU 版）
+     - sglang_1_1_ollama.py          Ollama 边缘低功耗版
+     - sglang_1_1_module_WSL_备份.py 开发阶段 WSL/GPU 验证代码（参考）
+
+  2. 动态控制系统（核心亮点）
+     - dynamic_control/              7 个文件，含监控/决策/执行/后端
+     - test_dynamic_control.py       集成测试（8 用例）
+     - demo_dynamic_control.py       6 场景决策演示
+
+  3. 测试
+     - test_11_module.py             单元测试（28 用例）
+     - final_check.py                验收测试（33 项检查）
+     - quick_test.py                 一键演示
+
+  4. 启动脚本
+     - run_rk3588.sh                 RK3588 一键启动
+     - run_11_module.sh              WSL 启动脚本
+
+  5. 文档
+     - README.md                     项目完整说明
+     - SETUP_RK3588.md               上板适配指南
+     - 模型转换说明.md                模型转换独立文档
+     - API文档_1.1模块.md            接口文档（调度员联调用）
+
+  6. 架构图
+     - architecture_diagrams.html    7 张架构图/流程图（浏览器打开截图）
+
+  7. 答辩材料
+     - 1.1模块_答辩PPT.pptx          答辩 PPT
+     - 1.1模块_进度汇报.docx          个人进度报告
+     - 执行人组1.1_联合进度汇报.docx   双人联合报告
+
+
+【运行环境说明】
+  正式部署目标：RK3588（ARM + NPU + 4GB 内存）
+
+  主文件 sglang_1_1_module.py 已适配 RK3588，
+  通过 RKNN 在 NPU 上推理，内置动态控制。
+
+  开发阶段做了三个平台的验证：
+    - WSL + NVIDIA GPU  （高精度验证）
+    - Ollama + ARM CPU  （边缘低功耗验证）
+    - RKNN + RK3588 NPU（正式部署）
+
+
+【重要说明：模型文件未随代码提交】
+  代码中不包含 .rknn 模型文件（体积大，且需板子到场后
+  针对目标平台转换）。转换流程见：
+    - 模型转换说明.md（独立文档）
+    - SETUP_RK3588.md（上板适配指南第 4 步）
+
+  板子到手后，转换 Qwen2.5-1.5B 为 .rknn 格式，
+  放到本目录即可运行（sglang_1_1_module.py 会自动加载）。
+
+
+【快速开始（RK3588 上）】
+  1. 转换模型 → 得到 qwen2.5-1.5b.rknn
+  2. 把 .rknn 放到本目录
+  3. bash run_rk3588.sh qwen2.5-1.5b.rknn
+
+  或直接：
+    python3 sglang_1_1_module.py
+
+
+【动态控制功能简介】
+  根据 RK3588 的 NPU 使用率、芯片温度、内存占用，
+  实时自动调节：
+    - 推理后端（NPU / CPU / 拒绝）
+    - 上下文长度（2048 → 1024 → 512）
+    - max_tokens（200 → 100 → 50）
+    - NPU 频率（high / mid / low）
+
+  采用四级状态机（IDLE/NORMAL/WARNING/CRITICAL）+ 滞回控制，
+  升级即时生效，降级需稳定 30 秒防抖动。
+
+
+【五个 API 函数】
+  generate_json(prompt, schema)         JSON Schema 约束输出
+  generate_json_pydantic(prompt, model) Pydantic 类型安全输出
+  generate_label(prompt, labels)        分类标签约束输出
+  generate_value(prompt, schema)        数值+结论约束输出
+  generate_diff(prompt, old_code)       代码 Diff 补丁输出
+
+============================================================

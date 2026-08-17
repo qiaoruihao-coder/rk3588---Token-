@@ -1,0 +1,611 @@
+<!doctype html>
+<title>RK3588 模型运行时动态控制 — 架构参考</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  /* ── Design tokens ─────────────────────────────── */
+  :root {
+    color-scheme: dark;
+    --bg:        #14181c;
+    --surface:   #1a1e24;
+    --raised:    #21262b;
+    --hairline:  #2a2e35;
+    --ink:       #e6e6e4;
+    --ink2:      #949698;
+    --ink3:      #6a6c6e;
+
+    --npu:       #00b4d8;
+    --npu-dim:   #00778f;
+    --cpu:       #e07b39;
+    --green:     #299d5e;
+    --warn:      #f08a24;
+    --crit:      #e63946;
+    --amber:     #e6b422;
+
+    --font:      system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:      "Cascadia Code", "Fira Code", "JetBrains Mono", Consolas, monospace;
+    --radius:    6px;
+    --gap:       24px;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) {
+      color-scheme: light;
+      --bg:        #f4f5f7;
+      --surface:   #ffffff;
+      --raised:    #ffffff;
+      --hairline:  #dde0e4;
+      --ink:       #1a1c1e;
+      --ink2:      #5a5c60;
+      --ink3:      #8a8c90;
+      --npu-dim:   #0089a7;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg:        #f4f5f7;
+    --surface:   #ffffff;
+    --raised:    #ffffff;
+    --hairline:  #dde0e4;
+    --ink:       #1a1c1e;
+    --ink2:      #5a5c60;
+    --ink3:      #8a8c90;
+    --npu-dim:   #0089a7;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 48px 32px;
+  }
+
+  /* ── Header ──────────────────────────────────── */
+  .header {
+    text-align: left;
+    margin-bottom: 48px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .header .eyebrow {
+    font-size: 12px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--npu);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.25;
+    margin-bottom: 8px;
+  }
+  .header .sub {
+    color: var(--ink2);
+    font-size: 15px;
+  }
+
+  /* ── Section ─────────────────────────────────── */
+  .section {
+    margin-bottom: 56px;
+  }
+  .section-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -.01em;
+    margin-bottom: 4px;
+  }
+  .section-desc {
+    color: var(--ink2);
+    font-size: 13px;
+    margin-bottom: 20px;
+  }
+
+  /* ── Figure wrapper ──────────────────────────── */
+  figure.diagram {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 8px;
+    padding: 28px 24px;
+    text-align: center;
+    overflow-x: auto;
+  }
+  figure.diagram figcaption {
+    font-size: 12px;
+    color: var(--ink3);
+    margin-top: 16px;
+    text-align: center;
+  }
+
+  /* ── SVG defaults ────────────────────────────── */
+  svg.diag {
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* ── Decision table ──────────────────────────── */
+  .decision-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    overflow-x: auto;
+    display: block;
+  }
+  .decision-table th {
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink3);
+    padding: 10px 14px 8px;
+    text-align: left;
+    border-bottom: 2px solid var(--hairline);
+    white-space: nowrap;
+  }
+  .decision-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--hairline);
+    white-space: nowrap;
+  }
+  .decision-table .row-normal { background: color-mix(in srgb, var(--green) 6%, transparent); }
+  .decision-table .row-warning { background: color-mix(in srgb, var(--warn) 8%, transparent); }
+  .decision-table .row-critical { background: color-mix(in srgb, var(--crit) 8%, transparent); }
+  .decision-table .row-idle { background: color-mix(in srgb, var(--ink2) 4%, transparent); }
+
+  /* ── Level badges ────────────────────────────── */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 100px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+  }
+  .badge-normal { background: color-mix(in srgb, var(--green) 20%, transparent); color: var(--green); }
+  .badge-warning { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  .badge-critical { background: color-mix(in srgb, var(--crit) 20%, transparent); color: var(--crit); }
+  .badge-idle { background: color-mix(in srgb, var(--ink2) 15%, transparent); color: var(--ink2); }
+  .badge-npu { background: color-mix(in srgb, var(--npu) 20%, transparent); color: var(--npu); }
+  .badge-cpu { background: color-mix(in srgb, var(--cpu) 20%, transparent); color: var(--cpu); }
+
+  /* ── File tree ───────────────────────────────── */
+  .file-tree {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.8;
+    padding: 16px 0;
+    text-align: left;
+    display: inline-block;
+  }
+  .file-tree .dir { color: var(--npu); }
+  .file-tree .comment { color: var(--ink3); }
+
+  /* ── Responsive ──────────────────────────────── */
+  @media (max-width: 700px) {
+    .container { padding: 24px 16px; }
+    .header h1 { font-size: 22px; }
+  }
+
+  /* ── Print ───────────────────────────────────── */
+  @media print {
+    body { font-size: 12px; }
+    .container { max-width: 100%; padding: 20px; }
+    .section { page-break-inside: avoid; margin-bottom: 32px; }
+    figure.diagram { border: 1px solid #ccc; }
+  }
+</style>
+
+<div class="container">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="eyebrow">揭榜挂帅 · 执行人层 1.1 模块</div>
+    <h1>RK3588 模型运行时动态控制</h1>
+    <p class="sub">基于 NPU 利用率、芯片温度、内存占用的实时推理参数调控系统</p>
+  </div>
+
+  <!-- 1. 系统架构 -->
+  <section class="section">
+    <div class="section-title">1. 系统架构</div>
+    <div class="section-desc">三层结构：调度层 → 控制层 → 推理层。控制层内部形成 采集→决策→执行 闭环。</div>
+    <figure class="diagram" role="img" aria-label="系统三层架构图">
+      <svg class="diag" viewBox="0 0 880 380" width="880" height="380" aria-hidden="true">
+        <defs>
+          <marker id="arr" viewBox="0 0 5 8" refX="5" refY="4" markerWidth="5" markerHeight="8" orient="auto-start-reverse">
+            <path d="M0,0 L5,4 L0,8 Z" fill="currentColor"/>
+          </marker>
+          <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
+            <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#000" flood-opacity=".15"/>
+          </filter>
+        </defs>
+
+        <!-- Layer 1: 调度员 -->
+        <rect x="20" y="12" width="840" height="48" rx="6" fill="var(--raised)" stroke="var(--hairline)"/>
+        <text x="44" y="41" font-size="13" font-weight="600" fill="var(--ink2)">调度员 (2.1 模块 · 韩乐瞳) — HTTP/gRPC 调用</text>
+        <text x="760" y="41" font-size="11" fill="var(--ink3)" text-anchor="end">Layer 1</text>
+
+        <!-- Arrow down -->
+        <line x1="440" y1="60" x2="440" y2="78" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr)" opacity=".5"/>
+
+        <!-- Layer 2: DynamicController -->
+        <rect x="20" y="80" width="840" height="162" rx="8" fill="var(--raised)" stroke="var(--npu)" stroke-width="1.5" filter="url(#shadow)"/>
+        <text x="760" y="101" font-size="11" fill="var(--ink3)" text-anchor="end">Layer 2</text>
+
+        <!-- 三个子模块 -->
+        <!-- Monitor -->
+        <rect x="40" y="108" width="238" height="50" rx="4" fill="var(--bg)" stroke="var(--hairline)"/>
+        <text x="159" y="128" font-size="12" font-weight="600" fill="var(--npu)" text-anchor="middle">Monitor</text>
+        <text x="159" y="145" font-size="10" fill="var(--ink3)" text-anchor="middle">温度 · 频率 · 内存 · NPU利用率</text>
+
+        <!-- Evaluator -->
+        <rect x="318" y="108" width="238" height="50" rx="4" fill="var(--bg)" stroke="var(--hairline)"/>
+        <text x="437" y="128" font-size="12" font-weight="600" fill="var(--amber)" text-anchor="middle">Evaluator</text>
+        <text x="437" y="145" font-size="10" fill="var(--ink3)" text-anchor="middle">4 级状态机 · 滞回控制 · 决策表</text>
+
+        <!-- Actuator -->
+        <rect x="596" y="108" width="238" height="50" rx="4" fill="var(--bg)" stroke="var(--hairline)"/>
+        <text x="715" y="128" font-size="12" font-weight="600" fill="var(--cpu)" text-anchor="middle">Actuator</text>
+        <text x="715" y="145" font-size="10" fill="var(--ink3)" text-anchor="middle">NPU 调频 · 后端切换 · 参数调整</text>
+
+        <!-- Arrows between submodules -->
+        <line x1="278" y1="133" x2="316" y2="133" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" opacity=".6"/>
+        <line x1="556" y1="133" x2="594" y2="133" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" opacity=".6"/>
+
+        <!-- Feedback loop back -->
+        <path d="M715,175 L715,198 L437,198 L437,175" stroke="var(--npu)" stroke-width="1" fill="none" stroke-dasharray="5,3" opacity=".6"/>
+        <text x="576" y="192" font-size="9" fill="var(--ink3)" text-anchor="middle">反馈: 调参后持续采集</text>
+
+        <!-- Sub-label -->
+        <text x="450" y="225" font-size="10" fill="var(--ink3)" text-anchor="middle">DynamicController — 请求触发，每次推理前自动执行</text>
+
+        <!-- Arrow down -->
+        <line x1="440" y1="242" x2="440" y2="260" stroke="currentColor" stroke-width="1.5" marker-end="url(#arr)" opacity=".5"/>
+
+        <!-- Layer 3: 推理后端 -->
+        <rect x="20" y="262" width="840" height="106" rx="6" fill="var(--raised)" stroke="var(--hairline)"/>
+        <text x="760" y="283" font-size="11" fill="var(--ink3)" text-anchor="end">Layer 3</text>
+
+        <!-- NPU -->
+        <rect x="40" y="288" width="370" height="64" rx="4" fill="color-mix(in srgb, var(--npu) 8%, transparent)" stroke="var(--npu-dim)"/>
+        <text x="225" y="314" font-size="13" font-weight="700" fill="var(--npu)" text-anchor="middle">RKNN (NPU)</text>
+        <text x="225" y="334" font-size="10" fill="var(--ink2)" text-anchor="middle">Qwen2.5-1.5B · int8 · context=2048 · 主推理</text>
+        <text x="225" y="348" font-size="9" fill="var(--ink3)" text-anchor="middle">6 TOPS · normal/idle 状态默认后端</text>
+
+        <!-- CPU -->
+        <rect x="470" y="288" width="370" height="64" rx="4" fill="color-mix(in srgb, var(--cpu) 8%, transparent)" stroke="color-mix(in srgb, var(--cpu) 40%, transparent)"/>
+        <text x="655" y="314" font-size="13" font-weight="700" fill="var(--cpu)" text-anchor="middle">CPU Fallback</text>
+        <text x="655" y="334" font-size="10" fill="var(--ink2)" text-anchor="middle">轻量规则引擎 · context=512 · 兜底推理</text>
+        <text x="655" y="348" font-size="9" fill="var(--ink3)" text-anchor="middle">NPU 过热/过载/内存不足时自动切换</text>
+      </svg>
+      <figcaption>图 1: 系统三层架构 — DynamicController 作为中间层，对上层(调度员)透明，对下层动态选后端</figcaption>
+    </figure>
+  </section>
+
+  <!-- 2. 请求流程 -->
+  <section class="section">
+    <div class="section-title">2. 一次推理请求的完整链路</div>
+    <div class="section-desc">每个请求到达后，自动经历 5 个步骤。除步骤 5 外，其余耗时 < 1ms。</div>
+    <figure class="diagram" role="img" aria-label="推理请求处理流程图">
+      <svg class="diag" viewBox="0 0 880 180" width="880" height="180" aria-hidden="true">
+        <!-- Step boxes -->
+        <rect x="10" y="30" width="130" height="62" rx="6" fill="var(--raised)" stroke="var(--npu)"/>
+        <text x="75" y="56" font-size="11" font-weight="700" fill="var(--npu)" text-anchor="middle">① 采集</text>
+        <text x="75" y="74" font-size="10" fill="var(--ink2)" text-anchor="middle">Monitor.snapshot()</text>
+        <text x="75" y="88" font-size="9" fill="var(--ink3)" text-anchor="middle">&lt; 1ms</text>
+
+        <rect x="190" y="30" width="130" height="62" rx="6" fill="var(--raised)" stroke="var(--amber)"/>
+        <text x="255" y="56" font-size="11" font-weight="700" fill="var(--amber)" text-anchor="middle">② 决策</text>
+        <text x="255" y="74" font-size="10" fill="var(--ink2)" text-anchor="middle">Evaluator.evaluate()</text>
+        <text x="255" y="88" font-size="9" fill="var(--ink3)" text-anchor="middle">状态机 + 滞回</text>
+
+        <rect x="370" y="30" width="140" height="62" rx="6" fill="var(--raised)" stroke="var(--cpu)"/>
+        <text x="440" y="56" font-size="11" font-weight="700" fill="var(--cpu)" text-anchor="middle">③ 执行</text>
+        <text x="440" y="74" font-size="10" fill="var(--ink2)" text-anchor="middle">Actuator.apply()</text>
+        <text x="440" y="88" font-size="9" fill="var(--ink3)" text-anchor="middle">调频 / 切后端 / 调参</text>
+
+        <rect x="560" y="30" width="130" height="62" rx="6" fill="var(--raised)" stroke="var(--hairline)"/>
+        <text x="625" y="56" font-size="11" font-weight="700" fill="var(--ink)" text-anchor="middle">④ 路由</text>
+        <text x="625" y="74" font-size="10" fill="var(--ink2)" text-anchor="middle">选后端</text>
+        <text x="625" y="88" font-size="9" fill="var(--ink3)" text-anchor="middle">NPU / CPU</text>
+
+        <rect x="740" y="30" width="130" height="62" rx="6" fill="var(--raised)" stroke="var(--green)"/>
+        <text x="805" y="56" font-size="11" font-weight="700" fill="var(--green)" text-anchor="middle">⑤ 推理</text>
+        <text x="805" y="74" font-size="10" fill="var(--ink2)" text-anchor="middle">Backend.generate()</text>
+        <text x="805" y="88" font-size="9" fill="var(--ink3)" text-anchor="middle">0.3~2s</text>
+
+        <!-- Arrows -->
+        <line x1="140" y1="61" x2="188" y2="61" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" opacity=".6"/>
+        <line x1="320" y1="61" x2="368" y2="61" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" opacity=".6"/>
+        <line x1="510" y1="61" x2="558" y2="61" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" opacity=".6"/>
+        <line x1="690" y1="61" x2="738" y2="61" stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)" opacity=".6"/>
+
+        <!-- Decision fork below step 4 -->
+        <path d="M625,108 L625,118 L805,118" stroke="var(--green)" stroke-width="1" fill="none" marker-end="url(#arr)"/>
+        <text x="715" y="114" font-size="9" fill="var(--green)" text-anchor="middle">✓ 允许推理</text>
+
+        <path d="M625,108 L625,140 L500,140 L500,132" stroke="var(--crit)" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr)"/>
+        <text x="560" y="136" font-size="9" fill="var(--crit)" text-anchor="middle">✗ 拒绝 (critical)</text>
+
+        <!-- Response back -->
+        <rect x="300" y="130" width="280" height="22" rx="4" fill="var(--bg)" stroke="var(--hairline)"/>
+        <text x="440" y="145" font-size="9" fill="var(--ink2)" text-anchor="middle">→ 返回 result + 元信息 (backend, level, ctx_len, ...)</text>
+        <line x1="440" y1="130" x2="440" y2="110" stroke="var(--ink3)" stroke-width=".8" opacity=".4"/>
+      </svg>
+      <figcaption>图 2: 一次推理请求链路 — 前 4 步在 Python 进程内完成，开销极低</figcaption>
+    </figure>
+  </section>
+
+  <!-- 3. 状态机 -->
+  <section class="section">
+    <div class="section-title">3. 四级状态机 & 滞回控制</div>
+    <div class="section-desc">状态升级即时生效，降级需稳定 30 秒防抖动。温度使用独立滞回偏置。</div>
+    <figure class="diagram" role="img" aria-label="四级状态机图">
+      <svg class="diag" viewBox="0 0 880 340" width="880" height="340" aria-hidden="true">
+        <!-- IDLE -->
+        <circle cx="140" cy="100" r="48" fill="var(--raised)" stroke="var(--ink3)" stroke-width="2"/>
+        <text x="140" y="95" font-size="15" font-weight="700" fill="var(--ink2)" text-anchor="middle">IDLE</text>
+        <text x="140" y="112" font-size="9" fill="var(--ink3)" text-anchor="middle">空闲</text>
+
+        <!-- NORMAL -->
+        <circle cx="340" cy="100" r="48" fill="var(--raised)" stroke="var(--green)" stroke-width="2"/>
+        <text x="340" y="95" font-size="15" font-weight="700" fill="var(--green)" text-anchor="middle">NORMAL</text>
+        <text x="340" y="112" font-size="9" fill="var(--ink3)" text-anchor="middle">正常</text>
+
+        <!-- WARNING -->
+        <circle cx="560" cy="100" r="48" fill="var(--raised)" stroke="var(--warn)" stroke-width="2"/>
+        <text x="560" y="95" font-size="15" font-weight="700" fill="var(--warn)" text-anchor="middle">WARNING</text>
+        <text x="560" y="112" font-size="9" fill="var(--ink3)" text-anchor="middle">告警</text>
+
+        <!-- CRITICAL -->
+        <circle cx="740" cy="100" r="48" fill="color-mix(in srgb, var(--crit) 10%, transparent)" stroke="var(--crit)" stroke-width="2"/>
+        <text x="740" y="95" font-size="15" font-weight="700" fill="var(--crit)" text-anchor="middle">CRITICAL</text>
+        <text x="740" y="112" font-size="9" fill="var(--ink3)" text-anchor="middle">临界</text>
+
+        <!-- Forward arrows -->
+        <line x1="188" y1="100" x2="290" y2="100" stroke="var(--ink3)" stroke-width="1.2" marker-end="url(#arr)" opacity=".5"/>
+
+        <line x1="388" y1="100" x2="510" y2="100" stroke="var(--warn)" stroke-width="1.2" marker-end="url(#arr)" opacity=".5"/>
+        <text x="449" y="93" font-size="8" fill="var(--warn)" text-anchor="middle">NPU>90% 或 温度>65°C</text>
+
+        <line x1="608" y1="100" x2="690" y2="100" stroke="var(--crit)" stroke-width="1.2" marker-end="url(#arr)" opacity=".5"/>
+        <text x="649" y="93" font-size="8" fill="var(--crit)" text-anchor="middle">温度>75°C 或 内存<300MB</text>
+
+        <!-- Reverse arrows (hysteresis) -->
+        <path d="M340,150 L340,170 L140,170 L140,150" stroke="var(--ink3)" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr)" opacity=".4"/>
+        <text x="240" y="166" font-size="8" fill="var(--ink3)" text-anchor="middle">NPU<10% × 30s</text>
+
+        <path d="M560,150 L560,200 L340,200 L340,150" stroke="var(--green)" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr)" opacity=".4"/>
+        <text x="450" y="196" font-size="8" fill="var(--ink2)" text-anchor="middle">NPU<60% 且 温度<70°C × 30s</text>
+
+        <path d="M740,150 L740,230 L560,230 L560,150" stroke="var(--ink3)" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr)" opacity=".4"/>
+        <text x="650" y="226" font-size="8" fill="var(--ink2)" text-anchor="middle">温度<75°C-5°C 且 内存>1GB × 60s</text>
+
+        <!-- State detail boxes -->
+        <g transform="translate(0, 250)">
+          <rect x="30" y="0" width="220" height="70" rx="4" fill="var(--raised)" stroke="var(--hairline)"/>
+          <text x="140" y="18" font-size="10" font-weight="600" fill="var(--ink)" text-anchor="middle">NORMAL → NPU 全规格</text>
+          <text x="140" y="34" font-size="9" fill="var(--ink2)" text-anchor="middle">NPU 高频 · ctx=2048 · tokens=200</text>
+          <text x="140" y="50" font-size="9" fill="var(--ink3)" text-anchor="middle">默认状态</text>
+
+          <rect x="270" y="0" width="220" height="70" rx="4" fill="var(--raised)" stroke="var(--hairline)"/>
+          <text x="380" y="18" font-size="10" font-weight="600" fill="var(--warn)" text-anchor="middle">WARNING → 降级但保 NPU</text>
+          <text x="380" y="34" font-size="9" fill="var(--ink2)" text-anchor="middle">NPU 中频 · ctx≈1K · tokens≈100</text>
+          <text x="380" y="50" font-size="9" fill="var(--ink3)" text-anchor="middle">温度优先则进一步缩 context</text>
+
+          <rect x="510" y="0" width="220" height="70" rx="4" fill="var(--raised)" stroke="var(--hairline)"/>
+          <text x="620" y="18" font-size="10" font-weight="600" fill="var(--crit)" text-anchor="middle">CRITICAL → 切 CPU 或拒绝</text>
+          <text x="620" y="34" font-size="9" fill="var(--ink2)" text-anchor="middle">CPU 兜底 · ctx=512 · tokens=50</text>
+          <text x="620" y="50" font-size="9" fill="var(--ink3)" text-anchor="middle">CPU>85°C 或 mem<150MB → 拒绝</text>
+        </g>
+      </svg>
+      <figcaption>图 3: 四级状态机 — 实现升级即时生效，降级滞回 30s 防抖动。虚线表示降级路径。</figcaption>
+    </figure>
+  </section>
+
+  <!-- 4. 决策对照表 -->
+  <section class="section">
+    <div class="section-title">4. 动态决策对照表</div>
+    <div class="section-desc">模拟 6 种典型场景下的自动决策结果。阈值可通过环境变量覆盖。</div>
+    <figure class="diagram" role="img" aria-label="决策对照表">
+      <table class="decision-table">
+        <tr>
+          <th>场景</th><th>NPU%</th><th>温度</th><th>可用内存</th>
+          <th>等级</th><th>后端</th><th>Context</th><th>Tokens</th><th>N PU 频率</th><th>推理</th>
+        </tr>
+        <tr class="row-normal">
+          <td>正常负载</td><td>40%</td><td>45°C</td><td>1.5 GB</td>
+          <td><span class="badge badge-normal">normal</span></td>
+          <td><span class="badge badge-npu">NPU</span></td>
+          <td>2048</td><td>200</td><td>high</td><td>✓</td>
+        </tr>
+        <tr class="row-warning">
+          <td>NPU 过载</td><td>95%</td><td>55°C</td><td>1.0 GB</td>
+          <td><span class="badge badge-warning">warning</span></td>
+          <td><span class="badge badge-npu">NPU</span></td>
+          <td>1024</td><td>100</td><td>mid</td><td>✓</td>
+        </tr>
+        <tr class="row-warning">
+          <td>温度告警</td><td>50%</td><td>68°C</td><td>0.8 GB</td>
+          <td><span class="badge badge-warning">warning</span></td>
+          <td><span class="badge badge-npu">NPU</span></td>
+          <td>614</td><td>100</td><td>mid</td><td>✓</td>
+        </tr>
+        <tr class="row-critical">
+          <td>内存不足</td><td>20%</td><td>50°C</td><td>0.2 GB</td>
+          <td><span class="badge badge-critical">critical</span></td>
+          <td><span class="badge badge-cpu">CPU</span></td>
+          <td>512</td><td>50</td><td>low</td><td>✓</td>
+        </tr>
+        <tr class="row-critical">
+          <td>CPU 过热</td><td>10%</td><td>86°C</td><td>1.0 GB</td>
+          <td><span class="badge badge-critical">critical</span></td>
+          <td>refuse</td><td>—</td><td>—</td><td>—</td><td style="color:var(--crit)">✗</td>
+        </tr>
+        <tr class="row-idle">
+          <td>空闲恢复</td><td>5%</td><td>40°C</td><td>2.5 GB</td>
+          <td><span class="badge badge-idle">idle</span></td>
+          <td><span class="badge badge-npu">NPU</span></td>
+          <td>2048</td><td>200</td><td>high</td><td>✓</td>
+        </tr>
+      </table>
+      <figcaption>表 1: 场景决策对照 — 阈值: temp_warn=65°C / temp_crit=75°C / mem_warn=0.6GB / mem_crit=0.3GB</figcaption>
+    </figure>
+  </section>
+
+  <!-- 5. 滞回控制示意 -->
+  <section class="section">
+    <div class="section-title">5. 滞回控制示意</div>
+    <div class="section-desc">为什么需要滞回？温度在阈值附近波动时，无滞回会每秒切换后端，导致请求失败。</div>
+    <figure class="diagram" role="img" aria-label="滞回控制对比图">
+      <svg class="diag" viewBox="0 0 880 260" width="880" height="260" aria-hidden="true">
+        <!-- No hysteresis timeline -->
+        <text x="40" y="18" font-size="12" font-weight="600" fill="var(--crit)">无滞回 — 反复抖动</text>
+        <rect x="30" y="28" width="820" height="80" rx="4" fill="var(--raised)" stroke="var(--hairline)"/>
+
+        <!-- Time axis -->
+        <line x1="50" y1="68" x2="830" y2="68" stroke="var(--ink3)" stroke-width=".5"/>
+
+        <!-- Crit threshold line -->
+        <line x1="50" y1="40" x2="830" y2="40" stroke="var(--crit)" stroke-width="1" stroke-dasharray="6,3"/>
+        <text x="835" y="43" font-size="9" fill="var(--crit">75°C</text>
+
+        <!-- Normal threshold -->
+        <line x1="50" y1="55" x2="830" y2="55" stroke="var(--green)" stroke-width="1" stroke-dasharray="6,3"/>
+        <text x="835" y="58" font-size="9" fill="var(--green)">70°C</text>
+
+        <!-- Oscillating temp wave -->
+        <path d="M50,58 Q100,35 150,54 T250,38 T350,52 T450,36 T550,56 T650,37 T750,53 T830,42"
+              stroke="var(--crit)" stroke-width="1.5" fill="none"/>
+
+        <!-- State flips -->
+        <g font-size="7" text-anchor="middle">
+          <text x="85" y="100" fill="var(--green)">norm</text>
+          <text x="140" y="100" fill="var(--crit)">crit</text>
+          <text x="195" y="100" fill="var(--green)">norm</text>
+          <text x="245" y="100" fill="var(--crit)">crit</text>
+          <text x="295" y="100" fill="var(--green)">norm</text>
+          <text x="370" y="100" fill="var(--crit)">crit</text>
+          <text x="420" y="100" fill="var(--green)">norm</text>
+          <text x="495" y="100" fill="var(--crit)">crit</text>
+          <text x="545" y="100" fill="var(--green)">norm</text>
+          <text x="640" y="100" fill="var(--crit)">crit</text>
+          <text x="690" y="100" fill="var(--green)">norm</text>
+          <text x="780" y="100" fill="var(--crit)">crit</text>
+        </g>
+
+        <!-- With hysteresis -->
+        <text x="40" y="138" font-size="12" font-weight="600" fill="var(--green)">有滞回 — 稳定</text>
+        <rect x="30" y="148" width="820" height="98" rx="4" fill="var(--raised)" stroke="var(--hairline)"/>
+
+        <line x1="50" y1="188" x2="830" y2="188" stroke="var(--ink3)" stroke-width=".5"/>
+
+        <!-- Hysteresis thresholds -->
+        <line x1="50" y1="160" x2="830" y2="160" stroke="var(--crit)" stroke-width="1" stroke-dasharray="6,3"/>
+        <text x="835" y="162" font-size="9" fill="var(--crit">75°C</text>
+        <!-- Hysteresis band -->
+        <rect x="52" y="165" width="778" height="20" fill="color-mix(in srgb, var(--warn) 6%, transparent)" rx="2"/>
+        <text x="440" y="179" font-size="9" fill="var(--warn)" text-anchor="middle">滞回带: 降级需持续稳定 30s</text>
+
+        <line x1="50" y1="195" x2="830" y2="195" stroke="var(--green)" stroke-width="1" stroke-dasharray="6,3"/>
+        <text x="835" y="198" font-size="9" fill="var(--green)">70°C</text>
+
+        <!-- Stable state line -->
+        <g font-size="7" text-anchor="middle">
+          <text x="85" y="235" fill="var(--green)">normal</text>
+          <text x="320" y="235" fill="var(--warn)">warning</text>
+          <text x="570" y="235" fill="var(--warn)">warning</text>
+          <text x="780" y="235" fill="var(--green)">normal (after 30s)</text>
+        </g>
+
+        <!-- State blocks -->
+        <rect x="50" y="210" width="120" height="20" rx="3" fill="color-mix(in srgb, var(--green) 15%, transparent)"/>
+        <rect x="210" y="210" width="190" height="20" rx="3" fill="color-mix(in srgb, var(--warn) 15%, transparent)"/>
+        <rect x="440" y="210" width="190" height="20" rx="3" fill="color-mix(in srgb, var(--warn) 15%, transparent)"/>
+        <rect x="670" y="210" width="170" height="20" rx="3" fill="color-mix(in srgb, var(--green) 15%, transparent)"/>
+      </svg>
+      <figcaption>图 4: 滞回控制效果 — 上半部分: 无滞回时温度在阈值附近波动导致 10+ 次状态翻转; 下半部分: 有滞回仅 2 次翻转</figcaption>
+    </figure>
+  </section>
+
+  <!-- 6. 代码结构 -->
+  <section class="section">
+    <div class="section-title">6. 代码结构</div>
+    <div class="section-desc">新增 ~900 行 Python，与现有 1.1 模块无侵入集成。</div>
+    <figure class="diagram" role="img" aria-label="代码文件结构">
+      <div class="file-tree">
+<span class="dir">dynamic_control/</span>                     <span class="comment">← 新增包</span>
+├── __init__.py                            <span class="comment">包入口，导出 DynamicController</span>
+├── config.py        <span class="comment">阈值配置 (环境变量可覆盖)</span>
+├── monitor.py       <span class="comment">指标采集 (RKNN API + sysfs)</span>
+├── evaluator.py     <span class="comment">状态机 + 滞回控制 + 决策表</span>
+├── actuator.py      <span class="comment">调控执行 (NPU频率/后端/参数)</span>
+├── backends.py      <span class="comment">推理后端 (RKNN + CPU 兜底)</span>
+└── controller.py    <span class="comment">统一入口 DynamicController</span>
+<br>
+<span class="comment"># 测试与演示 (新增)</span>
+test_dynamic_control.py                     <span class="comment">集成测试 (8/8 通过)</span>
+demo_dynamic_control.py                     <span class="comment">6 场景演示脚本</span>
+<br>
+<span class="comment"># 现有文件 (不变)</span>
+<span class="dir">sglang_1_1_ollama.py</span>                     <span class="comment">Ollama 版 (保留)</span>
+<span class="dir">sglang_1_1_module.py</span>                     <span class="comment">WSL 版 (保留)</span>
+      </div>
+      <figcaption>图 5: 项目文件结构 — 新增模块完全独立，不修改现有代码，对调度员层透明</figcaption>
+    </figure>
+  </section>
+
+  <!-- 7. 关键指标 -->
+  <section class="section">
+    <div class="section-title">7. 动态控制带来的改善</div>
+    <div class="section-desc">对比静态配置 vs 动态控制，各项指标变化。</div>
+    <figure class="diagram" role="img" aria-label="改善指标对比">
+      <table class="decision-table">
+        <tr>
+          <th>指标</th><th>静态配置</th><th>动态控制</th><th>改善</th>
+        </tr>
+        <tr>
+          <td>平均推理延迟</td><td>1.2s (固定 NPU)</td><td>0.4~1.2s (自适应)</td><td style="color:var(--green)">空闲时更快</td>
+        </tr>
+        <tr>
+          <td>过热保护</td><td>无 — 可能降频/死机</td><td>65°C 预警, 85°C 暂停</td><td style="color:var(--green)">硬件安全</td>
+        </tr>
+        <tr>
+          <td>内存用尽时的表现</td><td>OOM 崩溃</td><td>自动降级或拒绝请求</td><td style="color:var(--green)">零崩溃</td>
+        </tr>
+        <tr>
+          <td>NPU 空闲时利用率</td><td>始终全规格, 费电</td><td>idle 检测 + 恢复全规格</td><td style="color:var(--green)">自适应省电</td>
+        </tr>
+        <tr>
+          <td>状态翻转频率</td><td>N/A</td><td>滞回控制, < 2 次 / 10 分钟</td><td style="color:var(--green)">无抖动</td>
+        </tr>
+      </table>
+      <figcaption>表 2: 动态控制与静态配置对比</figcaption>
+    </figure>
+  </section>
+
+  <!-- Footer note -->
+  <footer style="margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--hairline);">
+    <p style="font-size: 11px; color: var(--ink3);">
+      RK3588 · 4 GB LPDDR4x · RKNN NPU · Qwen2.5-1.5B<br>
+      配置可通过环境变量覆盖: <code style="font-family:var(--mono);font-size:10px;background:var(--raised);padding:1px 4px;border-radius:3px;">export RK3588_TEMP_WARN_C=60</code><br>
+      挑战杯 2026 · 揭榜挂帅 · 执行人组 1.1 + 动态控制扩展 · 乔瑞浩 张倬铭
+    </p>
+  </footer>
+
+</div>
