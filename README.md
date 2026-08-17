@@ -382,3 +382,4 @@ export RK3588_STABILITY_SEC=60
 | 8/11 | Day 23+：动态控制系统架构 + 实现 + 架构图 |
 | 8/17 | 部署路线对齐：RK3588 用 llama.cpp/Ollama 约束解码；README 上板步骤改为总览并统一指向 SETUP |
 | 8/17 | 完善动态控制(模型档位动态选择) + README 新增三套版本定位表 |
+| 8/17 | 深度审计修复 4 处回归漏洞(JSON类型校验/CPU假数据安检/label·diff走决策/NPU接口) |

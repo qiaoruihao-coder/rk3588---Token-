@@ -269,6 +269,10 @@ def main():
         test_config_env_override,
         test_controller_lifecycle,
         test_decision_output_format,
+        test_schema_validation_enforced,
+        test_cpu_rule_only_flag,
+        test_label_diff_route_via_decision,
+        test_monitor_npu_no_rknn_api,
     ]
 
     for test in tests:
@@ -288,6 +292,72 @@ def main():
         print(f"  [{result[:4]}] {name}")
     print(f"\n  {passed}/{total} tests passed")
     return passed == total
+
+
+def test_schema_validation_enforced():
+    """修复1: JSON schema 类型校验——错误类型必须被拒。"""
+    print("\n" + "=" * 55)
+    print("Test 9: schema type validation enforced")
+    print("=" * 55)
+    from dynamic_control.schema_validate import validate_schema, SchemaValidationError, apply_coercion
+    schema = {"type": "object", "properties": {"name": {"type": "string"},
+              "age": {"type": "integer"}}, "required": ["name", "age"]}
+    # 正确类型通过
+    validate_schema({"name": "张三", "age": 20}, schema)
+    assert apply_coercion({"name": "张三", "age": 20.0}, schema)["age"] == 20, "20.0->20"
+    # 错误类型必须抛
+    try:
+        validate_schema({"name": 123, "age": 20}, schema)
+        raise AssertionError("wrong type name:int should be rejected")
+    except SchemaValidationError:
+        pass
+    print("  OK: wrong-typed JSON rejected, correct coerced")
+
+
+def test_cpu_rule_only_flag():
+    """修复2: CPU 规则引擎标记 rule_only, 拒绝假数据。"""
+    print("\n" + "=" * 55)
+    print("Test 10: CPU rule-only fake-data guard")
+    print("=" * 55)
+    from dynamic_control.backends import CPUBackend, BaseBackend
+    assert CPUBackend().rule_only is True, "CPUBackend should be rule_only"
+    # BaseBackend 是抽象类不能实例化; 用真实后端类属性验证 rule_only=False
+    from dynamic_control.llamacpp_backend import LlamaCppBackend as LlamaB
+    assert getattr(LlamaB, "rule_only", False) is False, "真实后端 rule_only=False"
+    from dynamic_control.controller import DynamicController
+    os.environ.pop("RK3588_ALLOW_RULE_BACKEND", None)
+    assert DynamicController._allow_rule_backend() is False, "default refuse fake"
+    os.environ["RK3588_ALLOW_RULE_BACKEND"] = "1"
+    assert DynamicController._allow_rule_backend() is True
+    del os.environ["RK3588_ALLOW_RULE_BACKEND"]
+    print("  OK: rule_only flag + allow gate correct")
+
+
+def test_label_diff_route_via_decision():
+    """修复3: generate_label/generate_diff 走 _handle 动态决策。"""
+    print("\n" + "=" * 55)
+    print("Test 11: label/diff route via dynamic decision")
+    print("=" * 55)
+    src = open(os.path.join(os.path.dirname(__file__), "dynamic_control", "controller.py"),
+               encoding="utf-8").read()
+    lbl = src.split("def generate_label")[1].split("def generate_value")[0]
+    diff = src.split("def generate_diff")[1].split("def _get_backend")[0]
+    assert "_handle" in lbl, "generate_label must call _handle"
+    assert "_handle" in diff, "generate_diff must call _handle"
+    print("  OK: both use _handle (decision/refusal apply)")
+
+
+def test_monitor_npu_no_rknn_api():
+    """修复4: monitor 不再用 PC 端 rknn.api.RKNN。"""
+    print("\n" + "=" * 55)
+    print("Test 12: monitor NPU-util uses sysfs/rknnlite not rknn.api")
+    print("=" * 55)
+    src = open(os.path.join(os.path.dirname(__file__), "dynamic_control", "monitor.py"),
+               encoding="utf-8").read()
+    assert "from rknn.api import RKNN" not in src, "rknn.api.RKNN (PC-only) removed"
+    assert ("/sys/kernel/debug/rknpu/load" in src) or ("/proc/rknpu/load" in src), \
+        "must read board rknpu load sysfs"
+    print("  OK: reads board rknpu load, no PC rknn.api")
 
 
 if __name__ == "__main__":

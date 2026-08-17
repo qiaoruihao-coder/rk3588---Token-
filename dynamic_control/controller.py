@@ -21,6 +21,8 @@ from .actuator import Actuator
 from .backends import CPUBackend, BaseBackend
 from .llamacpp_backend import LlamaCppBackend
 from .ollama_backend import OllamaBackend
+from .schema_validate import (validate_schema, apply_coercion,
+                              SchemaValidationError)
 
 
 class DynamicController:
@@ -143,6 +145,16 @@ class DynamicController:
                 raise RuntimeError("没有可用的推理后端")
             backend_name, backend = available[0]
 
+        # ── 规则引擎(占位)安检: 拒绝把编造的 unknown/0 当真实结论 ──
+        # 除非显式 RK3588_ALLOW_RULE_BACKEND=1(调试/无真实模型时)。
+        if getattr(backend, "rule_only", False) and not self._allow_rule_backend():
+            self._stats["refused"] += 1
+            self._stats["by_backend"]["refuse"] = \
+                self._stats["by_backend"].get("refuse", 0) + 1
+            raise RuntimeError(
+                f"后端[{backend_name}]为占位规则引擎, 拒绝返回假数据; "
+                f"如确需调试请设 RK3588_ALLOW_RULE_BACKEND=1")
+
         self._stats["by_backend"][backend_name] = \
             self._stats["by_backend"].get(backend_name, 0) + 1
         meta["actual_backend"] = backend_name
@@ -183,20 +195,19 @@ class DynamicController:
                                             structured=True)
                 # 约束解码后端已返回 dict(如 llama.cpp/Ollama) 
                 if isinstance(result, dict):
-                    return result
+                    # 校验字段类型(防 {"name":123} 类型错乱被当真相)
+                    validate_schema(result, schema)
+                    return apply_coercion(result, schema)
                 # 兜底(如 CPU 规则返回了 str)：解析
                 import re
                 text = result.strip() if isinstance(result, str) else str(result)
                 text = re.sub(r'^```(?:json)?\s*', '', text)
                 text = re.sub(r'\s*```$', '', text)
                 parsed = json.loads(text)
-                if "required" in schema:
-                    for f in schema["required"]:
-                        if f not in parsed:
-                            raise KeyError(f"Missing required field: {f}")
-                return parsed
+                validate_schema(parsed, schema)
+                return apply_coercion(parsed, schema)
 
-            except (json.JSONDecodeError, KeyError) as e:
+            except (json.JSONDecodeError, KeyError, SchemaValidationError) as e:
                 if attempt >= retries:
                     raise RuntimeError(
                         f"generate_json failed after {retries} retries: {e}"
@@ -218,12 +229,19 @@ class DynamicController:
 
     def generate_label(self, prompt: str, labels: list,
                        retries: int = 3, force_backend: Optional[str] = None) -> str:
-        """分类标签约束输出"""
-        backend = self._get_backend(force_backend)
-        return backend.generate_label(prompt, labels,
-                                       max_tokens=self.actuator.max_tokens,
-                                       context_len=self.actuator.context_len,
-                                       retries=retries)
+        """分类标签约束输出。也走动态决策(过热/内存不足等会拒绝)。"""
+        schema = {"type": "string", "enum": list(labels)}
+        # 走 _handle 让动态决策/拒绝检查生效(而非绕过直接取后端)
+        raw, meta = self._handle(prompt, schema,
+                                 max_tokens_base=self.actuator.max_tokens or 10,
+                                 context_len_base=self.actuator.context_len or 2048,
+                                 force_backend=force_backend,
+                                 structured=False)
+        text = raw.strip().lower() if isinstance(raw, str) else str(raw)
+        for lab in labels:
+            if lab.lower() in text:
+                return lab
+        raise RuntimeError(f"label 不在集合 {labels}: {text!r}")
 
     def generate_value(self, prompt: str, schema: dict = None,
                        retries: int = 3, force_backend: Optional[str] = None) -> dict:
@@ -241,16 +259,18 @@ class DynamicController:
 
     def generate_diff(self, prompt: str, old_code: str = "",
                       force_backend: Optional[str] = None) -> str:
-        """代码 Diff 输出"""
-        backend = self._get_backend(force_backend)
+        """代码 Diff 输出。也走动态决策/拒绝检查。"""
         if old_code:
             full = (f"Original:\n```\n{old_code}\n```\n"
                     f"Change: {prompt}\nOutput ONLY unified diff.")
         else:
             full = f"Output unified diff for: {prompt}"
-        return backend.generate(full, None,
-                                max_tokens=self.actuator.max_tokens,
-                                context_len=self.actuator.context_len)
+        raw, _ = self._handle(full, None,
+                              max_tokens_base=self.actuator.max_tokens,
+                              context_len_base=self.actuator.context_len,
+                              force_backend=force_backend,
+                              structured=False)
+        return raw if isinstance(raw, str) else str(raw)
 
     def _get_backend(self, force: Optional[str] = None) -> BaseBackend:
         """获取当前应使用的后端"""
@@ -262,6 +282,12 @@ class DynamicController:
         if available:
             return available[0][1]
         raise RuntimeError("No backend available")
+
+    @staticmethod
+    def _allow_rule_backend() -> bool:
+        """是否允许规则引擎(占位)后端返回假数据。默认拒绝, 需显式开启。"""
+        import os
+        return os.environ.get("RK3588_ALLOW_RULE_BACKEND", "0") == "1"
 
     # ── 状态查询 ─────────────────────────────────────────
     def status(self) -> dict:

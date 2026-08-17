@@ -6,6 +6,7 @@ RK3588 温度 zone 编号因板子而异，这里遍历匹配；找不到就返�
 """
 
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -118,27 +119,43 @@ class Monitor:
 
         return s
 
-    # ── NPU 使用率 (RKNN API) ─────────────────────────
+    # ── NPU 使用率 (sysfs / rknnlite) ─────────────────
     def _read_npu_rknn(self, s: SystemState) -> None:
-        """通过 RKNN toolkit 查询 NPU 使用率。需要 RKNN 已初始化。"""
-        try:
-            from rknn.api import RKNN
-            # 尝试获取全局 RKNN 实例
-            rknn = RKNN._instance if hasattr(RKNN, '_instance') else None
-            if rknn is None:
-                return
+        """
+        读取 NPU 使用率。
 
-            # eval_perf 返回 dict，包含 NPU 各核负载
-            perf = rknn.eval_perf(is_print=False)
-            if isinstance(perf, dict) and len(perf) > 0:
-                loads = [v for k, v in perf.items() if 'load' in k.lower()]
-                if loads:
-                    s.npu_util_pct = sum(loads) / len(loads)
-                else:
-                    # 取第一个数值字段作为利用率的近似
-                    s.npu_util_pct = float(list(perf.values())[0])
+        优先:
+          1) 板端 sysfs 调试节点 /sys/kernel/debug/rknpu/load (瑞芯微 NPU 采样)
+             (或 /proc/rknpu/load, 视驱动版本)
+          2) rknnlite.api.RKNNLite (板端推理库) 读全局实例
+        不再用 PC 端 rknn.api.RKNN (那是 x86 转换工具, 板端读不到, 恒 0)。
+        """
+        # ① sysfs NPU load 节点 (真实板端)
+        for p in ("/sys/kernel/debug/rknpu/load",
+                  "/proc/rknpu/load"):
+            try:
+                with open(p) as f:
+                    line = f.read().strip()
+                nums = re.findall(r"\d+(?:\.\d+)?", line)
+                if nums:
+                    s.npu_util_pct = float(nums[0])
+                    return
+            except Exception:
+                continue
+
+        # ② rknnlite(板端推理库)读取全局实例
+        try:
+            from rknnlite.api import RKNNLite
+            inst = getattr(RKNNLite, "_instance", None)
+            if inst is not None:
+                perf = inst.eval_perf() if hasattr(inst, "eval_perf") else None
+                if perf:
+                    s.npu_util_pct = float(perf)
+                    return
         except Exception:
-            pass  # RKNN 未初始化或无权限，静默
+            pass
+
+        # ③ 找不到则保持 0 (能力未知, 不误报)
 
     # ── thermal zone 扫描 ─────────────────────────────
     def _scan_thermal_zones(self) -> None:

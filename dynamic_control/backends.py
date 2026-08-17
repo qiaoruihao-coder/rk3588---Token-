@@ -16,6 +16,10 @@ import json, re, time
 class BaseBackend(ABC):
     """所有推理后端的统一接口"""
 
+    # 是否为"占位规则引擎"(未接入真实模型)。真实后端应为 False。
+    # controller 对 rule_only 后端默认拒绝返回假数据, 需显式 RK3588_ALLOW_RULE_BACKEND=1 才放行。
+    rule_only: bool = False
+
     @abstractmethod
     def generate(self, prompt: str, schema: Optional[dict] = None,
                  max_tokens: int = 200, context_len: int = 2048) -> str:
@@ -24,7 +28,7 @@ class BaseBackend(ABC):
 
     def generate_json(self, prompt: str, schema: dict,
                       max_tokens: int = 200, context_len: int = 2048,
-                      retries: int = 3) -> dict:
+                      retries: int = 3, tier: str = "full") -> dict:
         """JSON 约束生成 (带重试，各后端可覆盖)"""
         schema_str = json.dumps(schema)
         system = (
@@ -182,6 +186,10 @@ class CPUBackend(BaseBackend):
     替换这里的 _generate_rule 实现。
     """
 
+    # 占位规则引擎: 输出的 unknown/0 是"编造占位值", 非真实推理结果。
+    # controller 默认会拒绝放行, 需 RK3588_ALLOW_RULE_BACKEND=1 才允许(调试/无模型时)。
+    rule_only: bool = True
+
     def __init__(self):
         pass
 
@@ -190,7 +198,8 @@ class CPUBackend(BaseBackend):
         return "cpu"
 
     def generate(self, prompt: str, schema: Optional[dict] = None,
-                 max_tokens: int = 200, context_len: int = 2048) -> str:
+                 max_tokens: int = 200, context_len: int = 2048,
+                 tier: str = "full") -> str:
         """
         CPU 规则引擎推理。
 
