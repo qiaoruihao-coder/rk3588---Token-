@@ -34,7 +34,7 @@
 │   │   ├── monitor.py              指标采集（温度/频率/内存/NPU）
 │   │   ├── evaluator.py            状态机 + 滞回控制
 │   │   ├── actuator.py             调控执行（调频/切后端/调参）
-│   │   ├── backends.py             推理后端（RKNN NPU + CPU 兜底）
+│   │   ├── backends.py             推理后端（llama.cpp 约束解码 + CPU 兜底）
 │   │   └── controller.py           统一入口 DynamicController
 │   ├── test_dynamic_control.py     集成测试（8 用例）
 │   └── demo_dynamic_control.py     场景演示脚本
@@ -96,9 +96,15 @@ print(get_health())  # {'level': 'normal', 'backend': 'npu', ...}
 
 **环境变量**（可选）：
 ```bash
-export RK3588_MODEL_PATH=/path/to/model.rknn   # 指定模型路径
+# 指定 llama.cpp 服务地址 / 模型（默认 127.0.0.1:8080，自动取第一个模型）
+export LLAMACPP_BASE_URL=http://127.0.0.1:8080
+# 若用 Ollama 备选：
+export OLLAMA_BASE_URL=http://127.0.0.1:11434
+export OLLAMA_MODEL=qwen2.5:1.5b
 export RK3588_TEMP_WARN_C=60                     # 自定义温度阈值
 ```
+
+> 部署（llama-server/Ollama 安装+启动+约束解码验证）见 **`SETUP_RK3588.md`**。
 
 ### Ollama 版（开发调试用）
 
@@ -119,7 +125,7 @@ label = generate_label("产品质量?", ["qualified", "defective"])
 ```python
 from dynamic_control import DynamicController
 
-ctrl = DynamicController("qwen2.5-1.5b.rknn")
+ctrl = DynamicController()
 ctrl.init()
 
 # API 完全兼容
@@ -194,7 +200,7 @@ RK3588 三核异构 (CPU + GPU + NPU)，4GB 内存。根据 NPU 使用率、芯�
                          ├── Monitor   (采集: 温度/频率/内存/NPU)
                          ├── Evaluator (决策: 4级状态机 + 滞回)
                          ├── Actuator  (执行: 调频/切后端/调参)
-                         └── Backend   (推理: RKNN NPU / CPU 兜底)
+                         └── Backend   (推理: llama.cpp 约束解码 / CPU 兜底)
 ```
 
 **每次请求自动执行** 采集→决策→执行→路由→推理，前4步 < 1ms。
@@ -281,38 +287,30 @@ cat /proc/meminfo | head -5
 pip install psutil pydantic
 ```
 
-确认 RKNN 可用：
+**部署约束解码推理（llama.cpp / Ollama）** —— 完整安装、启动、验证请照 **`SETUP_RK3588.md`**。
+此处给快速路径：
 
 ```bash
-python -c "from rknnlite.api import RKNNLite; print('OK')"
-# 如果 ImportError，参考板子文档安装 rknn-toolkit-lite2
+# 方案A: llama.cpp (主推, 硬约束)
+cd ~ && git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp/build
+cmake .. -DGGML_NATIVE=OFF && make -j$(nproc) llama-server
+./bin/llama-server -m /data/qwen2.5-1.5b-instruct-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 2048
+
+# 方案B: Ollama (备选)
+curl -fsSL https://ollama.com/install.sh | sh && ollama pull qwen2.5:1.5b && ollama serve &
 ```
 
-### Step 3 · 模型转换
+### Step 3 · 模型转换（Qwen → .gguf，约束解码用）
 
-Qwen2.5-1.5B → .rknn 格式。这是唯一费时的一步（30min~2h）。
-
-**方案 A：在 x86 机器上用 rknn-toolkit2 转（推荐）**
-
-```python
-from rknn.api import RKNN
-
-rknn = RKNN()
-rknn.config(mean_values=[[0,0,0]], std_values=[[255,255,255]],
-            target_platform="rk3588", quantized_dtype="w8a8")
-rknn.load_onnx("qwen2.5-1.5b.onnx")     # 需先从 HuggingFace 导出
-rknn.build(do_quantization=True)
-rknn.export_rknn("qwen2.5-1.5b.rknn")
-```
-
-**方案 B：在板子上直接用 CPU 转（慢但省事）**
+不再转 `.rknn`（旧 RKNN 路线已弃用）。用 llama.cpp / Ollama 需要的 **GGUF** 格式：
 
 ```bash
-# 板子上装依赖后同方案 A
-pip install rknn-toolkit-lite2
-```
+# GGUF 可直接从 HF 下载现成的，如:
+#   Qwen/Qwen2.5-1.5B-Instruct-GGUF → qwen2.5-1.5b-instruct-q4_k_m.gguf
+scp qwen2.5-1.5b-instruct-q4_k_m.gguf user@rk3588:/data/
 
-产出的 `qwen2.5-1.5b.rknn` 放到 `揭榜挂帅/` 目录下。
+# 或用官方转换脚本从 HF 权重转 GGUF（按 llama.cpp 文档）
+```
 
 ### Step 4 · 验证 Monitor 采集
 
@@ -326,7 +324,6 @@ print('Level:', s.level)
 print('NPU temp:', s.npu_temp_c, '°C')
 print('CPU temp:', s.cpu_temp_c, '°C')
 print('NPU freq:', s.npu_freq_mhz, 'MHz')
-print('NPU util:', s.npu_util_pct, '%')
 print('Memory:', round(s.mem_avail_gb, 2), 'GB available')
 "
 ```
@@ -339,20 +336,26 @@ print('Memory:', round(s.mem_avail_gb, 2), 'GB available')
 python test_dynamic_control.py
 ```
 
-预期 8/8 通过。NPU 使用率可能为 0（需要 RKNN 模型已加载才能读），这条先不管。
+预期 8/8 通过。
 
-### Step 6 · 加载 RKNN 模型并验证推理
+### Step 6 · 连接约束解码服务并验证推理
+
+先确认服务可达（llama.cpp 或 Ollama）：
+
+```bash
+curl http://127.0.0.1:8080/v1/models        # llama.cpp
+# 或
+curl http://127.0.0.1:11434/api/tags        # Ollama
+```
+
+用本代码验证约束解码（只出合法 JSON，无废话）：
 
 ```python
 from dynamic_control import DynamicController
 
-ctrl = DynamicController("qwen2.5-1.5b.rknn")
+ctrl = DynamicController()
 ctrl.init()
-# 预期输出:
-#   [npu] loaded
-#   Primary backend: npu
 
-# 测试推理
 result = ctrl.generate_json(
     "输出学生张三, 20岁, 计算机专业",
     {"type":"object",
@@ -363,28 +366,13 @@ print(result)
 # 预期: {'name': '张三', 'age': 20, 'major': '计算机'}
 ```
 
-如果失败了，查看 `ctrl.status()` 返回的 `decision_level`，确认是硬件的 NPU 不可用还是模型格式不对。
+> 由 llama.cpp/Ollama 的 grammar 在 token 采样层硬约束，**不会**夹带"推理过程/自然语言废话"。
 
-### Step 7 · 完善 RKNN Tokenizer
+### Step 7 · 约束解码原理说明
 
-`backends.py` 的 `RKNBackend.generate()` 目前是简化实现。正确的做法是用 HuggingFace tokenizer 在 CPU 端做 tokenize/detokenize，只把 forward 放在 NPU。
-
-在 `RKNBackend.__init__` 中添加：
-
-```python
-from transformers import AutoTokenizer
-self._tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
-```
-
-修改 `generate()` 使用 tokenizer：
-
-```python
-input_ids = self._tokenizer.encode(prompt, return_tensors="np")
-outputs = self._rknn.inference([input_ids])
-text = self._tokenizer.decode(outputs[0], skip_special_tokens=True)
-```
-
-Tokenizer 不占 NPU 内存，CPU 上跑很快（<10ms）。
+JSON-schema 硬约束由**后端**（llama.cpp 的 GBNF grammar / Ollama 的 structured outputs）
+在**机床(token采样)层面**完成，代码 `llamacpp_backend.py` / `ollama_backend.py` 负责封装请求。
+旧 `RKNBackend`（rknnlite 单次前向）不是 LLM 工具链、无法约束解码，已弃用。
 
 ### Step 8 · 模拟负载测试
 
@@ -401,7 +389,7 @@ python demo_dynamic_control.py
 ```python
 from dynamic_control import DynamicController
 
-ctrl = DynamicController("qwen2.5-1.5b.rknn")
+ctrl = DynamicController()
 ctrl.init()
 
 # 调度员只需调这三个方法
@@ -431,25 +419,26 @@ export RK3588_MEM_WARN_GB=0.5   # 内存紧张就收紧
 
 sysfs 路径不对。跑 Step 1，把输出发我。不同 RK3588 板子的 `thermal_zone` 编号和 `devfreq` 设备名不同。
 
-### Q: RKNN 模型加载失败
+### Q: 连不上约束解码服务
 
-- 确认 `qwen2.5-1.5b.rknn` 文件存在且不为空
-- 确认模型转换时设置了 `target_platform="rk3588"`
-- 确认 NPU 驱动已加载：`lsmod | grep rknpu`
+- llama.cpp：确认 `curl http://127.0.0.1:8080/v1/models` 有响应；地址不符设 `LLAMACPP_BASE_URL`
+- Ollama：确认 `curl http://127.0.0.1:11434/api/tags`；地址不符设 `OLLAMA_BASE_URL`
+- 服务版本老、不支持 `response_format`/`format`：换最新 llama.cpp / Ollama
 
 ### Q: 推理时 OOM
 
 4GB 跑 Qwen2.5-1.5B + 系统开销很紧。尝试：
-- 用 int4 量化替代 int8（模型转换时 `quantized_dtype="w4a8"`）
-- 减少 context 长度：`export RK3588_DEFAULT_CONTEXT_LEN=1024`
+- 用更小的量化（q4_k_m）+ 更小的模型（1.5B 而非 3B）
+- 减小 context：llama-server 的 `-c 1024`，或 Ollama `num_ctx`
 
 ### Q: 如何强制指定后端（调试用）
 
 ```python
-# 强制用 NPU
+# 强制用 llama.cpp
 result = ctrl.generate_json(prompt, schema, force_backend="npu")
-
-# 强制用 CPU
+# 强制用 Ollama
+result = ctrl.generate_json(prompt, schema, force_backend="ollama")
+# 强制用 CPU 规则兜底
 result = ctrl.generate_json(prompt, schema, force_backend="cpu")
 ```
 
@@ -480,8 +469,10 @@ export RK3588_STABILITY_SEC=60
 | RK3588 主文件 | Ollama 版 | WSL 备份 |
 |-------------|----------|---------|
 | Python 3.10+ | Python 3.14 + Ollama | Python 3.12 + CUDA 12.9 |
-| rknn-toolkit-lite2 + psutil + pydantic | openai + pydantic + psutil | torch + transformers + outlines |
-| Qwen2.5-1.5B (.rknn int8) | Qwen2.5-1.5B (Ollama q4) | Qwen2.5-1.5B (HuggingFace) |
+| llama.cpp(llama-server) 或 Ollama + psutil + pydantic | openai + pydantic + psutil | torch + transformers + outlines |
+| Qwen2.5-1.5B (.gguf, q4_k_m) | Qwen2.5-1.5B (Ollama q4) | Qwen2.5-1.5B (HuggingFace) |
+
+> **部署详细步骤见 `SETUP_RK3588.md`**（llama-server / Ollama 安装 + 启动 + 约束解码验证）。
 
 ---
 
