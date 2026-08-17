@@ -59,6 +59,25 @@
 
 ---
 
+## ⭐ 约束解码后端（核心任务 1.1 的正式实现）
+
+老师 1.1 要求"**依托底层正则解码算子，在机床(采样/token)层面控制输出，强制只出 JSON/Diff/纯结论，熔断废话**"。
+为此 `dynamic_control/` 提供两个**真正的 token 层硬约束解码**后端（不是事后校验）：
+
+| 后端 | 文件 | 机制 | 适用 |
+|------|------|------|------|
+| **llama.cpp** | `llamacpp_backend.py` | JSON-schema → grammar，采样层硬锁合法 JSON | **RK3588 正式部署（主）** |
+| **Ollama** | `ollama_backend.py` | 原生 `format=json/schema` structured outputs | RK3588 备选 / 快速调试 |
+| CPU(规则) | `backends.py` | 兜底，非真推理 | 无模型时保底 |
+
+`DynamicController.generate_json` 默认走 llama.cpp 约束解码（`structured=True`），
+由后端在生成时锁死格式，彻底熔断"推理过程/自然语言废话"，只返回合法 dict。
+
+> 旧 `RKNBackend`（rknnlite）已弃用：`rknnlite.inference()` 是图像单次前向 API，
+> 不是 LLM 工具链，无法做约束解码。正式部署改用上述约束解码后端。
+
+---
+
 ## 快速开始
 
 ### 1.1 模块主文件（RK3588，正式部署用）

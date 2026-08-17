@@ -18,7 +18,9 @@ from typing import Optional
 from .monitor import Monitor, SystemState
 from .evaluator import Evaluator, Decision
 from .actuator import Actuator
-from .backends import RKNBackend, CPUBackend, BaseBackend
+from .backends import CPUBackend, BaseBackend
+from .llamacpp_backend import LlamaCppBackend
+from .ollama_backend import OllamaBackend
 
 
 class DynamicController:
@@ -44,9 +46,13 @@ class DynamicController:
         self.evaluator = Evaluator()
         self.actuator = Actuator()
 
-        # 注册后端
+        # 注册后端:
+        #  - "npu"  主推理 = llama.cpp 约束解码(保留npU键名兼容调度员, 底层是真约束解码)
+        #  - "ollama" 备选 = Ollama JSON 约束解码
+        #  - "cpu"  兜底 = 规则引擎
         self._backends: dict[str, BaseBackend] = {
-            "npu": RKNBackend(rknn_model_path),
+            "npu": LlamaCppBackend(),
+            "ollama": OllamaBackend(),
             "cpu": CPUBackend(),
         }
         self._primary = "npu"
@@ -54,7 +60,7 @@ class DynamicController:
         # 统计
         self._stats = {
             "total_requests": 0,
-            "by_backend": {"npu": 0, "cpu": 0, "refuse": 0},
+            "by_backend": {"npu": 0, "ollama": 0, "cpu": 0, "refuse": 0},
             "by_level": {"idle": 0, "normal": 0, "warning": 0, "critical": 0},
             "refused": 0,
         }
@@ -84,9 +90,13 @@ class DynamicController:
     # ── 核心流程: 请求 → 采集 → 决策 → 执行 → 推理 ────
     def _handle(self, prompt: str, schema: Optional[dict],
                 max_tokens_base: int, context_len_base: int,
-                force_backend: Optional[str] = None) -> tuple:
+                force_backend: Optional[str] = None,
+                structured: bool = False) -> tuple:
         """
         一次完整的动态请求处理。
+
+        structured=True 时走后端的"约束解码"路径(generate_json, 采样层硬约束),
+        False 时走普通 generate(供纯文本/Diff/label 文本用)。
 
         Returns: (result, meta: dict)
         """
@@ -139,9 +149,13 @@ class DynamicController:
         meta["actual_ctx_len"] = ctx_len
         meta["actual_max_tokens"] = max_tok
 
-        # Step 5: 推理
+        # Step 5: 推理 (约束解码 / 普通生成)
         t0 = time.time()
-        raw = backend.generate(prompt, schema, max_tokens=max_tok, context_len=ctx_len)
+        if structured and hasattr(backend, "generate_json"):
+            raw = backend.generate_json(prompt, schema, max_tokens=max_tok,
+                                        context_len=ctx_len)
+        else:
+            raw = backend.generate(prompt, schema, max_tokens=max_tok, context_len=ctx_len)
         meta["inference_time"] = time.time() - t0
 
         return raw, meta
@@ -158,17 +172,20 @@ class DynamicController:
         meta = {}
         for attempt in range(1, retries + 1):
             try:
-                raw, meta = self._handle(prompt, schema,
-                                         max_tokens_base=200,
-                                         context_len_base=2048,
-                                         force_backend=force_backend)
-                # 解析 JSON
+                result, meta = self._handle(prompt, schema,
+                                            max_tokens_base=200,
+                                            context_len_base=2048,
+                                            force_backend=force_backend,
+                                            structured=True)
+                # 约束解码后端已返回 dict(如 llama.cpp/Ollama) 
+                if isinstance(result, dict):
+                    return result
+                # 兜底(如 CPU 规则返回了 str)：解析
                 import re
-                text = raw.strip() if isinstance(raw, str) else str(raw)
+                text = result.strip() if isinstance(result, str) else str(result)
                 text = re.sub(r'^```(?:json)?\s*', '', text)
                 text = re.sub(r'\s*```$', '', text)
                 parsed = json.loads(text)
-
                 if "required" in schema:
                     for f in schema["required"]:
                         if f not in parsed:
@@ -178,9 +195,7 @@ class DynamicController:
             except (json.JSONDecodeError, KeyError) as e:
                 if attempt >= retries:
                     raise RuntimeError(
-                        f"generate_json failed after {retries} retries: {e}\n"
-                        f"  level={meta.get('decision', {}).level if meta else '?'}\n"
-                        f"  backend={meta.get('actual_backend', '?')}"
+                        f"generate_json failed after {retries} retries: {e}"
                     )
             except RuntimeError:
                 raise  # 拒绝请求，不重试
