@@ -43,6 +43,14 @@ class ControllerConfig:
     # critical 状态
     crit_context_len: int = 512        # 最小 context
 
+    # ── 模型档位动态选择 ────────────────────────────────
+    # 老师要求: 根据 NPU/温度/内存 实时调节"模型的选择"。
+    # 这里定义各状态推荐使用的模型档位名(对应后端里可切换的不同 .gguf/量化)。
+    # level -> model tier 名。normal/idle 用大模型, warning 降级, critical 用最小。
+    model_tiers: dict = None            # {level: name}, None 则走 _default_model_tiers
+    # 每个档位对应的可选模型名(需与后端可加载的模型名一致), 供调度员了解
+    model_tier_catalog: dict = None     # {tier: {model, note}}
+
     # ── 滞回控制 (防抖动) ───────────────────────────────
     # 退出 critical 需要满足所有条件持续 N 秒
     stability_sec: float = 30.0
@@ -54,7 +62,24 @@ class ControllerConfig:
     npu_freq_low_mhz: int = 300
 
     def __post_init__(self):
-        """从环境变量覆盖"""
+        """默认档位表 + 从环境变量覆盖"""
+        def _default_tiers():
+            return {
+                "idle": "full",
+                "normal": "full",
+                "warning": "mid",
+                "critical": "tiny",
+            }
+        def _default_catalog():
+            return {
+                "full":   {"model": "qwen2.5-1.5b-instruct-q4_k_m", "note": "正常/空闲: 全规格"},
+                "mid":    {"model": "qwen2.5-1.5b-instruct-q2_k",   "note": "告警: 降量化省内存"},
+                "tiny":   {"model": "qwen2.5-0.5b-instruct",         "note": "临界: 最小模型"},
+            }
+        if self.model_tiers is None:
+            self.model_tiers = _default_tiers()
+        if self.model_tier_catalog is None:
+            self.model_tier_catalog = _default_catalog()
         for field_name in self.__dataclass_fields__:
             env_key = f"RK3588_{field_name.upper()}"
             if env_key in os.environ:

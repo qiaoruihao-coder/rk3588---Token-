@@ -29,6 +29,9 @@ class Decision:
     # NPU 频率调整: "high" | "mid" | "low" | None (不调整)
     npu_freq_level: Optional[str] = None
 
+    # 模型档位: "full" | "mid" | "tiny" (随状态动态选模型, 老师要求的"调节模型选择")
+    model_tier: str = "full"
+
     # 是否允许继续推理
     can_infer: bool = True
 
@@ -87,6 +90,10 @@ class Evaluator:
         # ── 滞回稳定化 ──────────────────────────────────
         stable_level = self._apply_hysteresis(raw_level, now)
         d.level = stable_level
+
+        # ── 模型档位动态选择(老师要求)───────────────────
+        # 由 config.model_tiers 决定: level -> tier (full/mid/tiny)
+        d.model_tier = cfg.model_tiers.get(stable_level, "full")
 
         # ── 按状态决策 ──────────────────────────────────
         if stable_level == "critical":

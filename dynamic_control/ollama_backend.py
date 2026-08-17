@@ -85,15 +85,16 @@ class OllamaBackend:
         return data["message"]["content"]
 
     def generate(self, prompt: str, schema: dict | None = None,
-                 max_tokens: int = 200, context_len: int = 2048) -> str:
+                 max_tokens: int = 200, context_len: int = 2048,
+                 tier: str = "full") -> str:
         if not self._loaded:
             raise RuntimeError("Ollama 未连接，先 ollama serve")
         return self._chat(prompt, schema, max_tokens, json_mode=False)
 
     def generate_json(self, prompt: str, schema: dict,
                       max_tokens: int = 200, context_len: int = 2048,
-                      retries: int = 3) -> dict:
-        """JSON schema structured 输出。"""
+                      retries: int = 3, tier: str = "full") -> dict:
+        """JSON schema structured 输出。tier 供模型档位选择(默认取当前模型)。"""
         last = None
         for _ in range(max(1, retries)):
             text = self._chat(prompt, schema, max_tokens, json_mode=True)
@@ -110,7 +111,7 @@ class OllamaBackend:
 
     def generate_label(self, prompt: str, labels: list,
                        max_tokens: int = 10, context_len: int = 2048,
-                       retries: int = 3) -> str:
+                       retries: int = 3, tier: str = "full") -> str:
         schema = {"type": "string", "enum": list(labels)}
         text = self._chat(prompt, schema, min(int(max_tokens), 32), json_mode=False)
         text = text.strip().lower()

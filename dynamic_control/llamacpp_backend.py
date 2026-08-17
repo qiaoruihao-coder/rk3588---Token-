@@ -70,15 +70,28 @@ class LlamaCppBackend:
         return self._loaded
 
     # ── 生成 ──────────────────────────────────────
+    def _resolve_model(self, tier: str = "full") -> str:
+        """按模型档位返回对应模型名(动态选择模型)。"""
+        try:
+            from .config import get_config
+            cat = get_config().model_tier_catalog or {}
+            entry = cat.get(tier)
+            if entry and entry.get("model"):
+                return entry["model"]
+        except Exception:
+            pass
+        return self._model_name
+
     def _chat(self, prompt: str, schema: dict | None,
-              max_tokens: int, json_mode: bool) -> str:
+              max_tokens: int, json_mode: bool, tier: str = "full") -> str:
         """
         核心：调用 llama-server 的 /v1/chat/completions。
         json_mode=True 且带 schema 时，用 response_format={"type":"json_schema"} 触发
         JSON-schema grammar 硬约束解码（由 llama.cpp 在采样层执行）。
+        可按 tier 动态切换加载的模型（老师要求"调节模型选择"）。
         """
         payload = {
-            "model": self._model_name,
+            "model": self._resolve_model(tier),
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": int(max_tokens),
             "stream": False,
@@ -107,20 +120,21 @@ class LlamaCppBackend:
         return data["choices"][0]["message"]["content"]
 
     def generate(self, prompt: str, schema: dict | None = None,
-                 max_tokens: int = 200, context_len: int = 2048) -> str:
-        """默认生成 (json_mode=False，供纯文本/Diff 用)。"""
+                 max_tokens: int = 200, context_len: int = 2048,
+                 tier: str = "full") -> str:
+        """默认生成 (json_mode=False，供纯文本/Diff 用)。tier 选模型档位。"""
         if not self._loaded:
             raise RuntimeError("llama-server 未加载，先启动本机 llama-server")
-        return self._chat(prompt, schema, max_tokens, json_mode=False)
+        return self._chat(prompt, schema, max_tokens, json_mode=False, tier=tier)
 
     # ── 约束解码入口（供 controller 使用）───────────
     def generate_json(self, prompt: str, schema: dict,
                       max_tokens: int = 200, context_len: int = 2048,
-                      retries: int = 3) -> dict:
+                      retries: int = 3, tier: str = "full") -> dict:
         """JSON-schema 硬约束解码：由 llama.cpp grammar 在 token 层锁死。"""
         last = None
         for _ in range(max(1, retries)):
-            text = self._chat(prompt, schema, max_tokens, json_mode=True)
+            text = self._chat(prompt, schema, max_tokens, json_mode=True, tier=tier)
             text = text.strip()
             # 剥离可能的 markdown 围栏
             if text.startswith("```"):
@@ -138,10 +152,10 @@ class LlamaCppBackend:
 
     def generate_label(self, prompt: str, labels: list,
                        max_tokens: int = 10, context_len: int = 2048,
-                       retries: int = 3) -> str:
+                       retries: int = 3, tier: str = "full") -> str:
         """分类：用 enum grammar 罗列合法标签，强制只出其中之一。"""
         schema = {"type": "string", "enum": list(labels)}
-        text = self._chat(prompt, schema, min(int(max_tokens), 32), json_mode=False)
+        text = self._chat(prompt, schema, min(int(max_tokens), 32), json_mode=False, tier=tier)
         text = text.strip().lower()
         for lab in labels:
             if lab.lower() in text:

@@ -150,12 +150,16 @@ class DynamicController:
         meta["actual_max_tokens"] = max_tok
 
         # Step 5: 推理 (约束解码 / 普通生成)
+        # 模型档位由决策决定(随 NPU/温度/内存状态动态选模型)
+        tier = getattr(decision, "model_tier", "full")
+        meta["model_tier"] = tier
         t0 = time.time()
         if structured and hasattr(backend, "generate_json"):
             raw = backend.generate_json(prompt, schema, max_tokens=max_tok,
-                                        context_len=ctx_len)
+                                        context_len=ctx_len, tier=tier)
         else:
-            raw = backend.generate(prompt, schema, max_tokens=max_tok, context_len=ctx_len)
+            raw = backend.generate(prompt, schema, max_tokens=max_tok,
+                                   context_len=ctx_len, tier=tier)
         meta["inference_time"] = time.time() - t0
 
         return raw, meta
@@ -278,6 +282,7 @@ class DynamicController:
         return {
             "system": self.monitor.summary(),
             "decision_level": decision.level,
+            "model_tier": getattr(decision, "model_tier", "full"),
             "backend": self.actuator.get_backend(),
             "params": {
                 "context_len": self.actuator.context_len,
