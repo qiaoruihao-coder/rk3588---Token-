@@ -78,6 +78,23 @@
 
 ---
 
+## 三套版本定位表（部署优先级）
+
+仓库里的三个入口**对外 API 完全一致**（`generate_json` / `generate_label` / `generate_value` / `generate_diff`），
+调度员/上层不关心底层用哪个。**部署优先级**如下：
+
+| 版本 | 入口 | 底层 | 跑在哪 | 定位 | 是否用于 RK3588 正式部署 |
+|------|------|------|--------|------|--------------------------|
+| **RK3588 版（主）** | `sglang_1_1_module.py` / `dynamic_control.DynamicController` | llama.cpp 约束解码（主）+ Ollama（备）+ CPU 兜底 | **RK3588（4GB，离线）** | **正式部署，第一优先级** | ✅ 是 |
+| **Ollama 版** | `sglang_1_1_ollama.py` | Ollama 原生 JSON/structured 约束 | RK3588(ARM Ollama) 或任意有 CPU 的机器 | RK3588 的**备选后端**（已并入 dynamic_control 的 `ollama_backend`）；也可独立快速调试 | ⚠️ 备选 |
+| **GPU / WSL 版** | `sglang_1_1_module_WSL_备份.py` | GPU + `outlines`（底层正则/FSM 约束解码） | x86 + N 卡 | **开发参考 / 答辩演示**：验证约束解码内核；生产（RK3588）**不用 GPU**。若团队选择走"GPU 跑真 SGLang/outlines"方案才启用 | ❌ 否（RK3588 不用 GPU） |
+
+> - **RK3588 正式部署无 GPU**（板子 4GB，只用 llama.cpp/Ollama 约束解码）。
+> - **GPU 版保留**：① 演示约束解码的机制内核；② 若未来改走 GPU 方案（老师架构里的"边缘 GPU 节点"）可用。
+> - 三套同 API，切换只需换 import，不动上层逻辑。
+
+---
+
 ## 快速开始
 
 ### 1.1 模块主文件（RK3588，正式部署用）
@@ -364,3 +381,4 @@ export RK3588_STABILITY_SEC=60
 | 7/19 | Day 15-22：单元测试 + 文档 + PPT |
 | 8/11 | Day 23+：动态控制系统架构 + 实现 + 架构图 |
 | 8/17 | 部署路线对齐：RK3588 用 llama.cpp/Ollama 约束解码；README 上板步骤改为总览并统一指向 SETUP |
+| 8/17 | 完善动态控制(模型档位动态选择) + README 新增三套版本定位表 |
