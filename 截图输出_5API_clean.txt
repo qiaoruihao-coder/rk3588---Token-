@@ -1,0 +1,29 @@
+==========================================================
+  1.1 模块 — 输出 Token 强制控制 · 五个 API 函数实测
+  (llama.cpp / Ollama 约束解码后端 · 运行于 RK3588 板端)
+==========================================================
+
+[1] generate_json —— JSON Schema 约束输出
+    输入: 输出学生张三,20岁,计算机专业
+    输出: {'name': 'unknown', 'age': 0, 'major': 'unknown'}
+
+[2] generate_json_pydantic —— Pydantic 类型安全约束输出
+    输出: {'name': 'unknown', 'age': 0, 'major': 'unknown'}
+
+[3] generate_label —— 分类标签约束输出
+    输入: 产品表面有裂纹,质量?  标签集合: [qualified, defective]
+    输出: 'qualified'
+
+[4] generate_value —— 数值+结论约束输出
+    输出: {'area_mm2': 0, 'quality': 'qualified'}
+
+[5] generate_diff —— 代码 Diff 补丁输出
+    输入: 修复除零异常
+    输出:
+    Original:
+    ```
+    def div(a,b):
+        return a / b
+    ```
+    Change: 修复除零异常
+    Output ONLY unified diff.

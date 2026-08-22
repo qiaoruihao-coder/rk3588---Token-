@@ -209,6 +209,18 @@ class CPUBackend(BaseBackend):
         # 规则匹配：从 prompt 中提取关键信息
         return self._generate_rule(prompt, schema)
 
+    def generate_json(self, prompt: str, schema: dict,
+                      max_tokens: int = 200, context_len: int = 2048,
+                      retries: int = 3, tier: str = "full") -> dict:
+        """占位引擎直接对原始 prompt 规则提取, 不走 BaseBackend 的英文包装。"""
+        text = self._generate_rule(prompt, schema)
+        parsed = json.loads(text)
+        if "required" in schema:
+            for f in schema["required"]:
+                if f not in parsed:
+                    raise KeyError(f"Missing: {f}")
+        return parsed
+
     def _generate_rule(self, prompt: str, schema: Optional[dict]) -> str:
         """基于规则的简单解析 (CPU fallback 专属)"""
         # 尝试从 prompt 中提取 JSON 结构
@@ -229,15 +241,59 @@ class CPUBackend(BaseBackend):
                     result[key] = (max(sub_hits, key=len) if sub_hits
                                    else str(prop["enum"][0]))
                 elif prop.get("type") == "string":
-                    result[key] = "unknown"
+                    result[key] = self._extract_string(prompt, key, prop)
                 elif prop.get("type") == "integer":
-                    result[key] = 0
+                    result[key] = self._extract_int(prompt, key, prop)
                 elif prop.get("type") == "number":
-                    result[key] = 0.0
+                    result[key] = self._extract_number(prompt, key, prop)
             return json.dumps(result)
 
         # 纯文本 prompt: 返回空或 echo 关键部分
         return prompt[:200]
+
+    @staticmethod
+    def _extract_string(prompt: str, key: str, prop: dict) -> str:
+        """占位引擎: 从 prompt 提取字符串字段。
+        姓名提取: 优先匹配"学生张三""小李"这类, 取最后一个2-3字中文人名。
+        """
+        p = prompt or ""
+        if key in ("name", "姓名", "名字"):
+            # 人名常跟在"学生/同事/同学/叫"等词后
+            m = re.search(r"(?:学生|同事|同学|姓名|名字|叫|是)([\u4e00-\u9fa5]{2,3})", p)
+            if m:
+                return m.group(1)
+            # 兜底: 最后一段2-4字中文(避开开头动词)
+            m = re.findall(r"[\u4e00-\u9fa5]{2,4}", p)
+            if m:
+                return m[-1]
+        if key in ("major", "专业"):
+            m = re.search(r"([\u4e00-\u9fa5]{2,6}(?:专业|工程|科学|技术))", p)
+            if m:
+                return m.group(1)
+            m = re.search(r"([\u4e00-\u9fa5]{2,4})", p)
+            if m:
+                return m.group(1)
+        return "unknown"
+
+    @staticmethod
+    def _extract_int(prompt: str, key: str, prop: dict) -> int:
+        """占位引擎: 提取整数。年龄/数量等。"""
+        p = prompt or ""
+        if key in ("age", "年龄", "数量", "count", "num"):
+            m = re.search(r"(\d+)", p)
+            if m:
+                return int(m.group())
+        return 0
+
+    @staticmethod
+    def _extract_number(prompt: str, key: str, prop: dict) -> float:
+        """占位引擎: 提取数值(含小数)。面积/尺寸等。"""
+        p = prompt or ""
+        if key in ("area", "面积", "value", "score", "area_mm2"):
+            m = re.search(r"(\d+(?:\.\d+)?)", p)
+            if m:
+                return float(m.group())
+        return 0.0
 
     def is_available(self) -> bool:
         return True

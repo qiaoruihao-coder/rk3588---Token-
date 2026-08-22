@@ -1,0 +1,29 @@
+==========================================================
+  动态控制系统 — 运行时状态实测
+  (根据 NPU 使用率 / 芯片温度 / 内存占用 实时调节)
+==========================================================
+[DynamicController] Initializing...
+[LlamaCppBackend] 连接本地 llama-server 失败: <urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>
+  [npu] unavailable, will use fallback
+[OllamaBackend] 连接 Ollama 失败: <urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>
+  [ollama] unavailable, will use fallback
+  Primary backend: cpu
+
+[1] status() —— 完整运行状态
+    system: {'level': 'normal', 'npu_util_pct': 40.0, 'npu_freq_mhz': 900, 'npu_temp_c': 45.0, 'cpu_temp_c': 48.0, 'cpu_big_freq_mhz': 0, 'cpu_little_freq_mhz': 0, 'mem_avail_gb': 1.5, 'mem_used_pct': 60.0, 'timestamp': 1787433811.9859414}
+    decision_level: normal
+    model_tier: full
+    backend: npu
+    params: {'context_len': 2048, 'max_tokens': 200}
+    stats: {'total_requests': 0, 'by_backend': {'npu': 0, 'ollama': 0, 'cpu': 0, 'refuse': 0}, 'by_level': {'idle': 0, 'normal': 0, 'warning': 0, 'critical': 0}, 'refused': 0}
+
+[2] health() —— 轻量健康检查
+    {"level": "normal", "backend": "npu", "npu_avail": false, "cpu_avail": true, "mem_avail_gb": 1.5, "cpu_temp_c": 48.0}
+
+[3] Monitor 采集快照
+    等级: normal
+    NPU 使用率: 40.0%
+    NPU 频率: 900 MHz
+    NPU 温度: 45.0°C
+    CPU 温度: 48.0°C
+    可用内存: 1.5 GB
