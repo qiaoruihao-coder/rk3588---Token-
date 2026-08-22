@@ -1,0 +1,162 @@
+=======================================================
+Dynamic Controller — Integration Tests
+=======================================================
+
+=======================================================
+Test 1: Monitor.snapshot()
+=======================================================
+  Level: critical
+  NPU util: 0.0%
+  NPU freq: 0 MHz
+  NPU temp: None°C
+  CPU temp: None°C
+  CPU big freq: 0 MHz
+  CPU little freq: 0 MHz
+  Memory: 0.00 GB available / 0.00 GB total
+  PASS
+
+=======================================================
+Test 2: Monitor.summary()
+=======================================================
+  Summary: {
+  "level": "critical",
+  "npu_util_pct": 0.0,
+  "npu_freq_mhz": 0,
+  "npu_temp_c": null,
+  "cpu_temp_c": null,
+  "cpu_big_freq_mhz": 0,
+  "cpu_little_freq_mhz": 0,
+  "mem_avail_gb": 0.0,
+  "mem_used_pct": 0.0,
+  "timestamp": 1787435072.440614
+}
+  PASS
+
+=======================================================
+Test 3: Evaluator decision for each level
+=======================================================
+  [PASS] normal: normal → backend=npu (expected=npu), ctx=2048, tokens=200, freq=high
+  [PASS] warning_npu_overload: warning → backend=npu (expected=npu), ctx=1024, tokens=100, freq=mid
+  [PASS] warning_temp: warning → backend=npu (expected=npu), ctx=614, tokens=100, freq=mid
+  [PASS] critical_mem: critical → backend=cpu (expected=cpu), ctx=512, tokens=50, freq=low
+  [PASS] critical_overheat: critical → backend=cpu (expected=cpu), ctx=512, tokens=50, freq=low
+
+=======================================================
+Test 4: Evaluator hysteresis (anti-flapping)
+=======================================================
+  Normal → Critical: instant, backend=cpu ✓
+  Critical → Normal (immediate): blocked, stays critical ✓
+  After 30.0s → Normal: downgraded ✓
+
+=======================================================
+Test 5: Actuator.apply()
+=======================================================
+  Normal decision applied: {'backend': 'npu', 'context_len': 2048, 'max_tokens': 200, 'can_infer': True, 'level': 'normal', 'npu_freq_level': 'high'}
+  Refuse decision applied: {'backend': 'refuse', 'context_len': 0, 'max_tokens': 0, 'can_infer': False, 'level': 'normal'}
+  Warning decision applied: {'backend': 'npu', 'context_len': 1024, 'max_tokens': 100, 'can_infer': True, 'level': 'normal', 'npu_freq_level': 'mid'}
+
+=======================================================
+Test 6: Config environment override
+=======================================================
+  temp_warn_c = 70.0 (from env) ✓
+
+=======================================================
+Test 7: DynamicController lifecycle
+=======================================================
+[DynamicController] Initializing...
+[LlamaCppBackend] 连接本地 llama-server 失败: <urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>
+  [npu] unavailable, will use fallback
+[OllamaBackend] 连接 Ollama 失败: <urlopen error [WinError 10061] 由于目标计算机积极拒绝，无法连接。>
+  [ollama] unavailable, will use fallback
+  Primary backend: cpu
+  Init OK: True
+  Status: {
+  "system": {
+    "level": "critical",
+    "npu_util_pct": 0.0,
+    "npu_freq_mhz": 0,
+    "npu_temp_c": null,
+    "cpu_temp_c": null,
+    "cpu_big_freq_mhz": 0,
+    "cpu_little_freq_mhz": 0,
+    "mem_avail_gb": 0.0,
+    "mem_used_pct": 0.0,
+    "timestamp": 1787435076.5083942
+  },
+  "decision_level": "critical",
+  "model_tier": "tiny",
+  "backend": "npu",
+  "params": {
+    "context_len": 2048,
+    "max_tokens": 200
+  },
+  "stats": {
+    "total_requests": 0,
+    "by_backend": {
+      "npu": 0,
+      "ollama": 0,
+      "cpu": 0,
+      "refuse": 0
+    },
+    "by_level": {
+      "idle": 0,
+      "normal": 0,
+      "warning": 0,
+      "critical": 0
+    },
+    "refused": 0
+  }
+}
+  Health: {
+  "level": "critical",
+  "backend": "npu",
+  "npu_avail": false,
+  "cpu_avail": true,
+  "mem_avail_gb": 0.0,
+  "cpu_temp_c": null
+}
+  PASS
+
+=======================================================
+Test 8: Decision output validation
+=======================================================
+  Default decision: backend=npu, ctx=2048, tokens=200, level=normal
+  PASS
+
+=======================================================
+Test 9: schema type validation enforced
+=======================================================
+  OK: wrong-typed JSON rejected, correct coerced
+
+=======================================================
+Test 10: CPU rule-only fake-data guard
+=======================================================
+  OK: rule_only flag + allow gate correct
+
+=======================================================
+Test 11: label/diff route via dynamic decision
+=======================================================
+  OK: both use _handle (decision/refusal apply)
+
+=======================================================
+Test 12: monitor NPU-util uses sysfs/rknnlite not rknn.api
+=======================================================
+  OK: reads board rknpu load, no PC rknn.api
+
+=======================================================
+Summary
+=======================================================
+  [PASS] test_monitor_snapshot
+  [PASS] test_monitor_summary
+  [PASS] test_evaluator_decision_for_levels
+  [PASS] test_evaluator_hysteresis
+  [PASS] test_actuator_apply
+  [PASS] test_config_env_override
+  [PASS] test_controller_lifecycle
+  [PASS] test_decision_output_format
+  [PASS] test_schema_validation_enforced
+  [PASS] test_cpu_rule_only_flag
+  [PASS] test_label_diff_route_via_decision
+  [PASS] test_monitor_npu_no_rknn_api
+
+  12/12 tests passed

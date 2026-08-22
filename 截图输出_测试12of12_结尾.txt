@@ -1,0 +1,20 @@
+=======================================================
+  OK: reads board rknpu load, no PC rknn.api
+
+=======================================================
+Summary
+=======================================================
+  [PASS] test_monitor_snapshot
+  [PASS] test_monitor_summary
+  [PASS] test_evaluator_decision_for_levels
+  [PASS] test_evaluator_hysteresis
+  [PASS] test_actuator_apply
+  [PASS] test_config_env_override
+  [PASS] test_controller_lifecycle
+  [PASS] test_decision_output_format
+  [PASS] test_schema_validation_enforced
+  [PASS] test_cpu_rule_only_flag
+  [PASS] test_label_diff_route_via_decision
+  [PASS] test_monitor_npu_no_rknn_api
+
+  12/12 tests passed
