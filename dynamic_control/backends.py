@@ -216,22 +216,18 @@ class CPUBackend(BaseBackend):
             # 枚举约束(label 场景): 从 enum 中按关键词匹配返回
             if "enum" in schema:
                 text = (prompt or "").lower()
-                for cand in schema["enum"]:
-                    if str(cand).lower() in text:
-                        return str(cand)
-                return str(schema["enum"][0]) if schema["enum"] else "unknown"
+                # 最长匹配优先, 避免 "合格" 误命中 "不合格" 的子串
+                hits = [str(c) for c in schema["enum"] if str(c).lower() in text]
+                return max(hits, key=len) if hits else (str(schema["enum"][0]) if schema["enum"] else "unknown")
             props = schema.get("properties", {})
             result = {}
             text = (prompt or "").lower()
             for key, prop in props.items():
-                # 枚举约束: 从 enum 中按关键词匹配(占位引擎增强)
+                # 枚举约束: 从 enum 中按关键词匹配(占位引擎增强, 最长匹配优先)
                 if "enum" in prop:
-                    matched = None
-                    for cand in prop["enum"]:
-                        if str(cand).lower() in text:
-                            matched = str(cand)
-                            break
-                    result[key] = matched if matched else str(prop["enum"][0])
+                    sub_hits = [str(c) for c in prop["enum"] if str(c).lower() in text]
+                    result[key] = (max(sub_hits, key=len) if sub_hits
+                                   else str(prop["enum"][0]))
                 elif prop.get("type") == "string":
                     result[key] = "unknown"
                 elif prop.get("type") == "integer":
